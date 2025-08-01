@@ -76,22 +76,22 @@ def handle_memory_request(request):
 
 
 if __name__ == "__main__":
-    main()
+    # main()
 
-    # class MockRequest:
-    #     def __init__(self, json_data):
-    #         self._json = json_data
-    #         self.headers = {}
+    class MockRequest:
+        def __init__(self, json_data):
+            self._json = json_data
+            self.headers = {}
 
-    #     def get_json(self, silent=True):
-    #         return self._json
+        def get_json(self, silent=True):
+            return self._json
 
-    # mock_request = MockRequest(
-    #     {
-    #         "message": "Hello, this is a test message.",
-    #         "chat_id": "kfddddjkfdsafda",
-    #         "name": "Test User",
-    #         "is_store": True,
-    #     }
-    # )
-    # handle_memory_request(mock_request)
+    mock_request = MockRequest(
+        {
+            "message": "Hello, this is a test message.",
+            "chat_id": "kfddddjkfdsafda",
+            "name": "Test User",
+            "is_store": True,
+        }
+    )
+    handle_memory_request(mock_request)
