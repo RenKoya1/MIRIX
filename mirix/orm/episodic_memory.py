@@ -134,6 +134,7 @@ class EpisodicEvent(SqlalchemyBase, OrganizationMixin):
             Index('ix_episodic_memory_details_sqlite', 'details') if not settings.mirix_pg_uri_no_default else None,
         ])
     )
+    __table_args__ += ({'schema': 'mirix'},)
 
     @declared_attr
     def organization(cls) -> Mapped["Organization"]:

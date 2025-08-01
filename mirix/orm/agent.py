@@ -69,7 +69,7 @@ class Agent(SqlalchemyBase, OrganizationMixin):
         lazy="selectin",
         doc="Environment variables associated with this agent.",
     )
-    tools: Mapped[List["Tool"]] = relationship("Tool", secondary="tools_agents", lazy="selectin", passive_deletes=True)
+    tools: Mapped[List["Tool"]] = relationship("Tool", secondary="tools_agents", lazy="selectin", passive_deletes=True, back_populates="agents")
     core_memory: Mapped[List["Block"]] = relationship("Block", secondary="blocks_agents", lazy="selectin")
     messages: Mapped[List["Message"]] = relationship(
         "Message",

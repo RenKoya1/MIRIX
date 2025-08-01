@@ -109,7 +109,7 @@ class MirixConfig:
         #    )
         #    raise ValueError(error_message)
 
-        config = configparser.ConfigParser()
+        config = configparser.ConfigParser(interpolation=None)
 
         # allow overriding with env variables
         if os.getenv("MEMGPT_CONFIG_PATH"):

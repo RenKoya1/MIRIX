@@ -163,6 +163,10 @@ class SqlalchemyBase(CommonSqlalchemyMetaMixins, Base):
 
     __order_by_default__ = "created_at"
 
+    __table_args__ = (
+        {"schema": "mirix"},
+    )   
+
     id: Mapped[str] = mapped_column(String, primary_key=True)
 
     @classmethod

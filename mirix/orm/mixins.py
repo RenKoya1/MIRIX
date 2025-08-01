@@ -21,7 +21,7 @@ class OrganizationMixin(Base):
 
     __abstract__ = True
 
-    organization_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organizations.id"), nullable=True)
+    organization_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("mirix.organizations.id"), nullable=True)
 
 
 class UserMixin(Base):
@@ -29,7 +29,7 @@ class UserMixin(Base):
 
     __abstract__ = True
 
-    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("mirix.users.id"))
 
 
 class AgentMixin(Base):
@@ -37,7 +37,7 @@ class AgentMixin(Base):
 
     __abstract__ = True
 
-    agent_id: Mapped[str] = mapped_column(String, ForeignKey("agents.id", ondelete="CASCADE"))
+    agent_id: Mapped[str] = mapped_column(String, ForeignKey("mirix.agents.id", ondelete="CASCADE"))
 
 
 class SandboxConfigMixin(Base):
@@ -45,4 +45,4 @@ class SandboxConfigMixin(Base):
 
     __abstract__ = True
 
-    sandbox_config_id: Mapped[str] = mapped_column(String, ForeignKey("sandbox_configs.id"))
+    sandbox_config_id: Mapped[str] = mapped_column(String, ForeignKey("mirix.sandbox_configs.id"))

@@ -36,7 +36,7 @@ class MirixBase(BaseModel):
         return Field(
             ...,
             description=cls._id_description(prefix),
-            pattern=cls._id_regex_pattern(prefix),
+            # pattern=cls._id_regex_pattern(prefix),
             examples=[cls._id_example(prefix)],
             default_factory=cls._generate_id,
         )

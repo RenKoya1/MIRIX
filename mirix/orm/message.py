@@ -21,6 +21,7 @@ class Message(SqlalchemyBase, OrganizationMixin, AgentMixin):
     __table_args__ = (
         Index("ix_messages_agent_created_at", "agent_id", "created_at"),
         Index("ix_messages_created_at", "created_at", "id"),
+         {"schema": "mirix"},
     )
     __pydantic_model__ = PydanticMessage
 
@@ -33,7 +34,7 @@ class Message(SqlalchemyBase, OrganizationMixin, AgentMixin):
     tool_calls: Mapped[List[OpenAIToolCall]] = mapped_column(ToolCallColumn, doc="Tool call information")
     tool_call_id: Mapped[Optional[str]] = mapped_column(nullable=True, doc="ID of the tool call")
     step_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("steps.id", ondelete="SET NULL"), nullable=True, doc="ID of the step that this message belongs to"
+        ForeignKey("mirix.steps.id", ondelete="SET NULL"), nullable=True, doc="ID of the step that this message belongs to"
     )
     otid: Mapped[Optional[str]] = mapped_column(nullable=True, doc="The offline threading ID associated with this message")
     tool_returns: Mapped[List[ToolReturn]] = mapped_column(

@@ -20,7 +20,7 @@ class Block(OrganizationMixin, SqlalchemyBase):
     __tablename__ = "block"
     __pydantic_model__ = PydanticBlock
     # This may seem redundant, but is necessary for the BlocksAgents composite FK relationship
-    __table_args__ = (UniqueConstraint("id", "label", name="unique_block_id_label"),)
+    __table_args__ = (UniqueConstraint("id", "label", name="unique_block_id_label"), {"schema": "mirix"},)
 
     template_name: Mapped[Optional[str]] = mapped_column(
         nullable=True, doc="the unique name that identifies a block in a human-readable way"

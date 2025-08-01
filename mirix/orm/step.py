@@ -20,12 +20,12 @@ class Step(SqlalchemyBase):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: f"step-{uuid.uuid4()}")
     origin: Mapped[Optional[str]] = mapped_column(nullable=True, doc="The surface that this agent step was initiated from.")
     organization_id: Mapped[str] = mapped_column(
-        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        ForeignKey("mirix.organizations.id", ondelete="RESTRICT"),
         nullable=True,
         doc="The unique identifier of the organization that this step ran for",
     )
     provider_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("providers.id", ondelete="RESTRICT"),
+        ForeignKey("mirix.providers.id", ondelete="RESTRICT"),
         nullable=True,
         doc="The unique identifier of the provider that was configured for this step",
     )

@@ -24,7 +24,7 @@ class SandboxConfig(SqlalchemyBase, OrganizationMixin):
     __pydantic_model__ = PydanticSandboxConfig
 
     # For now, we only allow one type of sandbox config per organization
-    __table_args__ = (UniqueConstraint("type", "organization_id", name="uix_type_organization"),)
+    __table_args__ = (UniqueConstraint("type", "organization_id", name="uix_type_organization"), {"schema": "mirix"},)
 
     id: Mapped[str] = mapped_column(String, primary_key=True, nullable=False)
     type: Mapped[SandboxType] = mapped_column(SqlEnum(SandboxType), nullable=False, doc="The type of sandbox.")
@@ -44,7 +44,7 @@ class SandboxEnvironmentVariable(SqlalchemyBase, OrganizationMixin, SandboxConfi
     __pydantic_model__ = PydanticSandboxEnvironmentVariable
 
     # We cannot have duplicate key names in the same sandbox, the env var would get overwritten
-    __table_args__ = (UniqueConstraint("key", "sandbox_config_id", name="uix_key_sandbox_config"),)
+    __table_args__ = (UniqueConstraint("key", "sandbox_config_id", name="uix_key_sandbox_config"), {"schema": "mirix"},)
 
     id: Mapped[str] = mapped_column(String, primary_key=True, nullable=False)
     key: Mapped[str] = mapped_column(String, nullable=False, doc="The name of the environment variable.")
@@ -61,7 +61,7 @@ class AgentEnvironmentVariable(SqlalchemyBase, OrganizationMixin, AgentMixin):
 
     __tablename__ = "agent_environment_variables"
     # We cannot have duplicate key names for the same agent, the env var would get overwritten
-    __table_args__ = (UniqueConstraint("key", "agent_id", name="uix_key_agent"),)
+    __table_args__ = (UniqueConstraint("key", "agent_id", name="uix_key_agent"), {"schema": "mirix"},)
 
     # agent_env_var generates its own id
     # TODO: We want to migrate all the ORM models to do this, so we will need to move this to the SqlalchemyBase

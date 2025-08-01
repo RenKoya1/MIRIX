@@ -44,8 +44,20 @@ from mirix.interface import QueuingInterface
 from mirix.prompts import gpt_persona
 
 
-def create_client():
-    return LocalClient()
+def create_client(
+    user_id: Optional[str] = None,
+    org_id: Optional[str] = None,
+    debug: bool = False,
+    default_llm_config: Optional[LLMConfig] = None,
+    default_embedding_config: Optional[EmbeddingConfig] = None,
+):
+    return LocalClient(
+        user_id=user_id,
+        org_id=org_id,
+        debug=debug,
+        default_llm_config=default_llm_config,
+        default_embedding_config=default_embedding_config,
+    )
 
 
 class AbstractClient(object):
@@ -399,7 +411,22 @@ class LocalClient(AbstractClient):
             self.org_id = self.server.organization_manager.DEFAULT_ORG_ID
         # save user_id that `LocalClient` is associated with
         if user_id:
-            self.user_id = user_id
+            try: 
+                
+                user = self.server.user_manager.get_user_by_id(user_id)
+            except NoResultFound:
+                from mirix.schemas.user import User
+            
+                user = self.server.user_manager.create_user(
+                    User(
+                        id=user_id,
+                        name="Default User",
+                        organization_id=self.org_id,
+                        timezone="Asia/Tokyo",
+                        is_deleted=False,
+                    )
+                )
+            self.user_id = user.id
         else:
             # get default user
             self.user_id = self.server.user_manager.DEFAULT_USER_ID
