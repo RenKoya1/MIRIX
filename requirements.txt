@@ -20,7 +20,6 @@ composio
 colorama
 anthropic
 httpx_sse
-Markdown
 rapidfuzz
 rank-bm25
 psutil
