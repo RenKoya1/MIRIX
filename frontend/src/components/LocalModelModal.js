@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import queuedFetch from '../utils/requestQueue';
 import './LocalModelModal.css';
+import { useTranslation } from 'react-i18next';
 
 function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
+  const { t } = useTranslation();
   const [formData, setFormData] = useState({
     model_name: '',
     model_endpoint: '',
+    api_key: '',
     temperature: 0.7,
     max_tokens: 4096,
     maximum_length: 32768
@@ -27,11 +30,15 @@ function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
     
     // Validation
     if (!formData.model_name.trim()) {
-      setError('Model name is required');
+      setError(t('localModel.errors.modelNameRequired'));
       return;
     }
     if (!formData.model_endpoint.trim()) {
-      setError('Model endpoint is required');
+      setError(t('localModel.errors.endpointRequired'));
+      return;
+    }
+    if (!formData.api_key.trim()) {
+      setError(t('localModel.errors.apiKeyRequired'));
       return;
     }
     
@@ -54,6 +61,7 @@ function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
           setFormData({
             model_name: '',
             model_endpoint: '',
+            api_key: '',
             temperature: 0.7,
             max_tokens: 4096,
             maximum_length: 32768
@@ -85,6 +93,7 @@ function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
     setFormData({
       model_name: '',
       model_endpoint: '',
+      api_key: '',
       temperature: 0.7,
       max_tokens: 4096,
       maximum_length: 32768
@@ -99,7 +108,7 @@ function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
     <div className="modal-overlay">
       <div className="local-model-modal">
         <div className="modal-header">
-          <h3>Add Local Model</h3>
+          <h3>{t('localModel.title')}</h3>
           <button className="close-button" onClick={handleClose}>
             ×
           </button>
@@ -108,7 +117,7 @@ function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
         <form onSubmit={handleSubmit} className="modal-form">
           <div className="form-group">
             <label htmlFor="model_name">
-              Model Name <span className="required">*</span>
+              {t('localModel.form.modelName')} <span className="required">{t('localModel.form.required')}</span>
             </label>
             <input
               type="text"
@@ -116,18 +125,18 @@ function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
               name="model_name"
               value={formData.model_name}
               onChange={handleInputChange}
-              placeholder="e.g. qwen3-32b"
+              placeholder={t('localModel.form.modelNamePlaceholder')}
               disabled={isLoading}
               required
             />
             <small className="field-description">
-              The name identifier for your deployed model
+              {t('localModel.form.modelNameDescription')}
             </small>
           </div>
 
           <div className="form-group">
             <label htmlFor="model_endpoint">
-              Model Endpoint <span className="required">*</span>
+              {t('localModel.form.modelEndpoint')} <span className="required">{t('localModel.form.required')}</span>
             </label>
             <input
               type="url"
@@ -135,18 +144,37 @@ function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
               name="model_endpoint"
               value={formData.model_endpoint}
               onChange={handleInputChange}
-              placeholder="e.g. http://localhost:8000/v1"
+              placeholder={t('localModel.form.modelEndpointPlaceholder')}
               disabled={isLoading}
               required
             />
             <small className="field-description">
-              The API endpoint URL for your deployed model
+              {t('localModel.form.modelEndpointDescription')}
+            </small>
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="api_key">
+              {t('localModel.form.apiKey')} <span className="required">{t('localModel.form.required')}</span>
+            </label>
+            <input
+              type="password"
+              id="api_key"
+              name="api_key"
+              value={formData.api_key}
+              onChange={handleInputChange}
+              placeholder={t('localModel.form.apiKey')}
+              disabled={isLoading}
+              required
+            />
+            <small className="field-description">
+              {t('localModel.form.apiKeyDescription')}
             </small>
           </div>
 
           <div className="form-group">
             <label htmlFor="temperature">
-              Temperature
+              {t('localModel.form.temperature')}
             </label>
             <input
               type="number"
@@ -160,13 +188,13 @@ function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
               disabled={isLoading}
             />
             <small className="field-description">
-              Controls randomness in responses (0.0 = deterministic, 2.0 = very random)
+              {t('localModel.form.temperatureDescription')}
             </small>
           </div>
 
           <div className="form-group">
             <label htmlFor="max_tokens">
-              Max Tokens
+              {t('localModel.form.maxTokens')}
             </label>
             <input
               type="number"
@@ -179,13 +207,13 @@ function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
               disabled={isLoading}
             />
             <small className="field-description">
-              Maximum number of tokens to generate in responses
+              {t('localModel.form.maxTokensDescription')}
             </small>
           </div>
 
           <div className="form-group">
             <label htmlFor="maximum_length">
-              Maximum Length
+              {t('localModel.form.maximumLength')}
             </label>
             <input
               type="number"
@@ -198,7 +226,7 @@ function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
               disabled={isLoading}
             />
             <small className="field-description">
-              Maximum context length supported by the model
+              {t('localModel.form.maximumLengthDescription')}
             </small>
           </div>
 
@@ -215,14 +243,14 @@ function LocalModelModal({ isOpen, onClose, serverUrl, onSuccess }) {
               className="cancel-button"
               disabled={isLoading}
             >
-              Cancel
+              {t('localModel.form.cancel')}
             </button>
             <button
               type="submit"
               className="submit-button"
               disabled={isLoading}
             >
-              {isLoading ? 'Adding...' : 'Add Model'}
+              {isLoading ? t('localModel.form.adding') : t('localModel.form.addModel')}
             </button>
           </div>
         </form>

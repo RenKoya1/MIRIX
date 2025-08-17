@@ -8,14 +8,16 @@ import BackendLoadingModal from './components/BackendLoadingModal';
 import Logo from './components/Logo';
 import queuedFetch from './utils/requestQueue';
 import './App.css';
+import { useTranslation } from 'react-i18next';
 
 function App() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState('chat');
   const [settings, setSettings] = useState({
     model: 'gpt-4o-mini',
     persona: 'helpful_assistant',
     timezone: 'America/New_York',
-    serverUrl: 'http://localhost:8000'
+    serverUrl: 'http://localhost:47283'
   });
 
   // Lift chat messages state to App level to persist across tab switches
@@ -29,6 +31,13 @@ function App() {
     isOpen: false,
     missingKeys: [],
     modelType: ''
+  });
+
+  // Track pending model changes for retry after API key update
+  const [pendingModelChange, setPendingModelChange] = useState({
+    model: null,
+    type: null, // 'chat' or 'memory'
+    retryFunction: null
   });
 
   // Backend loading modal state
@@ -255,6 +264,22 @@ function App() {
   const handleApiKeySubmit = async () => {
     // Refresh API key status after submission
     await checkApiKeys();
+    
+    // If there's a pending model change, retry it now
+    if (pendingModelChange.retryFunction) {
+      console.log(`Retrying ${pendingModelChange.type} model change to '${pendingModelChange.model}' after API key update`);
+      try {
+        await pendingModelChange.retryFunction();
+      } catch (error) {
+        console.error('Failed to retry model change:', error);
+      }
+      // Clear the pending change after retry attempt
+      setPendingModelChange({
+        model: null,
+        type: null,
+        retryFunction: null
+      });
+    }
   };
 
   useEffect(() => {
@@ -323,32 +348,32 @@ function App() {
             size="small" 
             showText={false} 
           />
-          <span className="version">v0.1.0</span>
+          <span className="version">v0.1.2</span>
         </div>
         <div className="tabs">
           <button 
             className={`tab ${activeTab === 'chat' ? 'active' : ''}`}
             onClick={() => setActiveTab('chat')}
           >
-            💬 Chat
+            {t('tabs.chat')}
           </button>
           <button 
             className={`tab ${activeTab === 'screenshots' ? 'active' : ''}`}
             onClick={() => setActiveTab('screenshots')}
           >
-            📸 Screenshots
+            {t('tabs.screenshots')}
           </button>
           <button 
             className={`tab ${activeTab === 'memory' ? 'active' : ''}`}
             onClick={() => setActiveTab('memory')}
           >
-            🧠 Existing Memory
+            {t('tabs.memory')}
           </button>
           <button 
             className={`tab ${activeTab === 'settings' ? 'active' : ''}`}
             onClick={() => setActiveTab('settings')}
           >
-            ⚙️ Settings
+            {t('tabs.settings')}
           </button>
         </div>
       </div>
@@ -389,6 +414,18 @@ function App() {
             settings={settings}
             onSettingsChange={handleSettingsChange}
             onApiKeyCheck={checkApiKeys}
+            onApiKeyRequired={(missingKeys, modelType, pendingModel, changeType, retryFunction) => {
+              setApiKeyModal({
+                isOpen: true,
+                missingKeys,
+                modelType
+              });
+              setPendingModelChange({
+                model: pendingModel,
+                type: changeType,
+                retryFunction: retryFunction
+              });
+            }}
             isVisible={activeTab === 'settings'}
           />
         )}

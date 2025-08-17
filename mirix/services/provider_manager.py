@@ -25,6 +25,29 @@ class ProviderManager:
             ),
             actor=actor,
         )
+    
+    @enforce_types
+    def upsert_provider(self, name: str, api_key: str, organization_id: str, actor: PydanticUser) -> PydanticProvider:
+        """Insert or update a provider in the database. Updates if exists, creates if not."""
+        with self.session_maker() as session:
+            # Check if provider already exists for this organization
+            existing_providers = [p for p in self.list_providers(actor=actor) if p.name == name]
+            
+            if existing_providers:
+                # Update existing provider
+                existing_provider = existing_providers[0]
+                provider_update = ProviderUpdate(id=existing_provider.id, api_key=api_key)
+                return self.update_provider(existing_provider.id, provider_update, actor)
+            else:
+                # Create new provider
+                return self.create_provider(
+                    PydanticProvider(
+                        name=name,
+                        api_key=api_key,
+                        organization_id=organization_id,
+                    ),
+                    actor=actor,
+                )
 
     @enforce_types
     def create_provider(self, provider: PydanticProvider, actor: PydanticUser) -> PydanticProvider:
@@ -128,4 +151,20 @@ class ProviderManager:
         openai_provider = [provider for provider in self.list_providers() if provider.name == "openai"]
         if len(openai_provider) != 0:
             return openai_provider[0].api_key
+        return None
+
+    @enforce_types
+    def get_azure_openai_override_provider_id(self) -> Optional[str]:
+        """Helper function to fetch custom azure openai provider id for v0 BYOK feature"""
+        azure_openai_provider = [provider for provider in self.list_providers() if provider.name == "azure_openai"]
+        if len(azure_openai_provider) != 0:
+            return azure_openai_provider[0].id
+        return None
+
+    @enforce_types
+    def get_azure_openai_override_key(self) -> Optional[str]:
+        """Helper function to fetch custom azure openai key for v0 BYOK feature"""
+        azure_openai_provider = [provider for provider in self.list_providers() if provider.name == "azure_openai"]
+        if len(azure_openai_provider) != 0:
+            return azure_openai_provider[0].api_key
         return None

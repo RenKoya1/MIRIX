@@ -5,6 +5,7 @@ import ApiKeyModal from './ApiKeyModal';
 import ClearChatModal from './ClearChatModal';
 import queuedFetch from '../utils/requestQueue';
 import './ChatWindow.css';
+import { useTranslation } from 'react-i18next';
 
 const ChatWindow = ({ settings, messages, setMessages, isScreenMonitoring }) => {
   const [includeScreenshots, setIncludeScreenshots] = useState(true);
@@ -19,12 +20,13 @@ const ChatWindow = ({ settings, messages, setMessages, isScreenMonitoring }) => 
   const [isClearing, setIsClearing] = useState(false);
   const messagesEndRef = useRef(null);
   const abortControllersRef = useRef(new Map());
+  const { t } = useTranslation();
 
   // Calculate derived values from state early
   const hasActiveStreaming = activeStreamingRequests.size > 0;
-  const currentStreamingContent = hasActiveStreaming 
-    ? Array.from(activeStreamingRequests.values())[activeStreamingRequests.size - 1].streamingContent
-    : '';
+  const currentStreamingData = hasActiveStreaming 
+    ? Array.from(activeStreamingRequests.values())[activeStreamingRequests.size - 1]
+    : null;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -32,7 +34,7 @@ const ChatWindow = ({ settings, messages, setMessages, isScreenMonitoring }) => 
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, currentStreamingContent]);
+  }, [messages, currentStreamingData]);
 
   useEffect(() => {
     return () => {
@@ -403,13 +405,24 @@ const ChatWindow = ({ settings, messages, setMessages, isScreenMonitoring }) => 
                   const updated = new Map(prev);
                   const current = updated.get(requestId);
                   if (current) {
-                    let newContent = current.streamingContent;
+                    const currentState = { ...current };
+                    
                     if (data.message_type === 'internal_monologue') {
-                      newContent += '\n[Thinking] ' + data.content;
+                      // Handle thinking messages separately
+                      if (!currentState.thinkingSteps) {
+                        currentState.thinkingSteps = [];
+                      }
+                      currentState.thinkingSteps.push({
+                        id: Date.now() + Math.random(),
+                        content: data.content,
+                        timestamp: new Date().toISOString()
+                      });
                     } else if (data.message_type === 'response') {
-                      newContent += '\n' + data.content;
+                      // Handle response content
+                      currentState.streamingContent = (currentState.streamingContent || '') + data.content;
                     }
-                    updated.set(requestId, { ...current, streamingContent: newContent });
+                    
+                    updated.set(requestId, currentState);
                   }
                   return updated;
                 });
@@ -445,7 +458,7 @@ const ChatWindow = ({ settings, messages, setMessages, isScreenMonitoring }) => 
         const errorMessage = {
           id: Date.now() + 1,
           type: 'error',
-          content: `Error: ${error.message}`,
+          content: t('chat.errorWithMessage', { message: error.message }),
           timestamp: new Date().toISOString()
         };
         setMessages(prev => [...prev, errorMessage]);
@@ -513,7 +526,7 @@ const ChatWindow = ({ settings, messages, setMessages, isScreenMonitoring }) => 
       const errorMessage = {
         id: Date.now(),
         type: 'error',
-        content: `❌ Failed to clear conversation history: ${error.message}`,
+        content: `❌ ${t('chat.clearFailed')}: ${error.message}`,
         timestamp: new Date().toISOString()
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -578,32 +591,32 @@ const ChatWindow = ({ settings, messages, setMessages, isScreenMonitoring }) => 
     <div className="chat-window">
       <div className="chat-header">
         <div className="chat-info">
-          <span className="model-info">Model: {currentModel}</span>
-          <span className="persona-info">Persona: {settings.persona}</span>
+          <span className="model-info">{t('chat.model')}: {currentModel}</span>
+          <span className="persona-info">{t('chat.persona')}: {settings.persona}</span>
         </div>
         <div className="chat-actions">
           <button 
             className={`screenshot-toggle ${includeScreenshots ? 'enabled' : 'disabled'}`}
             onClick={toggleScreenshotSetting}
-            title={includeScreenshots ? "Allow assistant to see your recent screenshots" : "Assistant cannot see your recent screenshots"}
+            title={includeScreenshots ? t('chat.screenshotTooltip.enabled') : t('chat.screenshotTooltip.disabled')}
           >
-            📷 {includeScreenshots ? 'ON' : 'OFF'}
+            📷 {includeScreenshots ? t('chat.screenshotOn') : t('chat.screenshotOff')}
           </button>
           {hasActiveStreaming && (
             <button 
               className="stop-button"
               onClick={stopGeneration}
-              title="Stop generation"
+              title={t('chat.stopTitle')}
             >
-              ⏹️ Stop
+              ⏹️ {t('chat.stop')}
             </button>
           )}
                       <button 
               className="clear-button"
               onClick={handleClearClick}
-              title="Clear chat"
+              title={t('chat.clearTitle')}
             >
-              🗑️ Clear
+              🗑️ {t('chat.clear')}
             </button>
           </div>
         </div>
@@ -611,12 +624,12 @@ const ChatWindow = ({ settings, messages, setMessages, isScreenMonitoring }) => 
         <div className="messages-container">
           {messages.length === 0 && (
             <div className="welcome-message">
-              <h2>Welcome to MIRIX!</h2>
-              <p>Start a conversation with your AI assistant.</p>
+              <h2>{t('chat.welcome.title')}</h2>
+              <p>{t('chat.welcome.subtitle')}</p>
               {window.electronAPI ? (
-                <p>💡 MIRIX is running in the desktop app environment.</p>
+                <p>💡 {t('chat.welcome.desktop')}</p>
               ) : (
-                <p>💡 Download the desktop app for an enhanced experience and more features!</p>
+                <p>💡 {t('chat.welcome.web')}</p>
               )}
             </div>
           )}
@@ -625,12 +638,13 @@ const ChatWindow = ({ settings, messages, setMessages, isScreenMonitoring }) => 
             <ChatBubble key={message.id} message={message} />
           ))}
           
-          {currentStreamingContent && (
+          {currentStreamingData && (
             <ChatBubble 
               message={{
                 id: 'streaming',
                 type: 'assistant',
-                content: currentStreamingContent,
+                content: currentStreamingData.streamingContent || '',
+                thinkingSteps: currentStreamingData.thinkingSteps || [],
                 timestamp: new Date().toISOString(),
                 isStreaming: true
               }} 

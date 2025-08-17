@@ -5,7 +5,7 @@ openpyxl
 Markdown
 Pillow
 scikit-image
-openai
+openai==1.72.0
 tiktoken
 google-genai
 dotenv
@@ -39,4 +39,4 @@ pg8000
 pgvector
 json_repair
 rich
-psycopg2
+psycopg2-binary

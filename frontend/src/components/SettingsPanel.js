@@ -2,8 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import './SettingsPanel.css';
 import queuedFetch from '../utils/requestQueue';
 import LocalModelModal from './LocalModelModal';
+import { useTranslation } from 'react-i18next';
 
-const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible }) => {
+const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, onApiKeyRequired, isVisible }) => {
+  const { t, i18n } = useTranslation();
   const [personaDetails, setPersonaDetails] = useState({});
   const [selectedPersonaText, setSelectedPersonaText] = useState('');
   const [isUpdatingPersona, setIsUpdatingPersona] = useState(false);
@@ -350,16 +352,43 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
       
       if (response.ok) {
         const data = await response.json();
-        setModelUpdateMessage('✅ Chat agent model set successfully!');
-        console.log(`Successfully set chat agent model: ${newModel}`);
         
-        // Automatically check for API keys after model change
-        if (onApiKeyCheck) {
-          console.log('Checking API keys for new model...');
-          setModelUpdateMessage('✅ Model set! Checking API keys...');
-          setTimeout(() => {
-            onApiKeyCheck();
-          }, 500); // Small delay to allow backend to update
+        if (data.success) {
+          setModelUpdateMessage('✅ Chat agent model set successfully!');
+          console.log(`Successfully set chat agent model: ${newModel}`);
+          
+          // Show initialization message when model is successfully set
+          setModelUpdateMessage('🔄 Initializing chat agent with new model...');
+          
+          // Automatically check for API keys after model change
+          if (onApiKeyCheck) {
+            console.log('Checking API keys for new model...');
+            setTimeout(() => {
+              onApiKeyCheck();
+            }, 500); // Small delay to allow backend to update
+          }
+        } else {
+          // Handle case where backend returned success: false
+          if (data.missing_keys && data.missing_keys.length > 0) {
+            // If there are missing API keys, immediately open the API key modal
+            console.log(`Missing API keys for chat model '${newModel}': ${data.missing_keys.join(', ')}`);
+            setModelUpdateMessage('🔑 Opening API key configuration...');
+            
+            if (onApiKeyRequired) {
+              // Create retry function for this model change
+              const retryFunction = () => handleModelChange(newModel);
+              
+              // Small delay to show the message before opening modal
+              setTimeout(() => {
+                onApiKeyRequired(data.missing_keys, newModel, newModel, 'chat', retryFunction);
+              }, 500);
+            }
+          } else {
+            // Show error message for other types of failures
+            let errorMessage = data.message || 'Failed to set chat agent model';
+            setModelUpdateMessage(`❌ ${errorMessage}`);
+            console.error('Chat model set failed:', data);
+          }
         }
       } else {
         const errorData = await response.text();
@@ -412,28 +441,38 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
           setMemoryModelUpdateMessage('✅ Memory manager model set successfully!');
           console.log(`Successfully set memory manager model: ${newModel}`);
           
+          // Show initialization message when model is successfully set
+          setMemoryModelUpdateMessage('🔄 Initializing memory manager with new model...');
+          
           // Automatically check for API keys after memory model change
           if (onApiKeyCheck) {
             console.log('Checking API keys for new memory model...');
-            setMemoryModelUpdateMessage('✅ Memory model set! Checking API keys...');
             setTimeout(() => {
               onApiKeyCheck();
             }, 500); // Small delay to allow backend to update
           }
         } else {
           // Handle case where backend returned success: false
-          let errorMessage = data.message || 'Failed to set memory manager model';
           if (data.missing_keys && data.missing_keys.length > 0) {
-            errorMessage += ` (Missing API keys: ${data.missing_keys.join(', ')})`;
-            // Trigger API key check for missing keys
-            if (onApiKeyCheck) {
+            // If there are missing API keys, immediately open the API key modal
+            console.log(`Missing API keys for memory model '${newModel}': ${data.missing_keys.join(', ')}`);
+            setMemoryModelUpdateMessage('🔑 Opening API key configuration...');
+            
+            if (onApiKeyRequired) {
+              // Create retry function for this model change
+              const retryFunction = () => handleMemoryModelChange(newModel);
+              
+              // Small delay to show the message before opening modal
               setTimeout(() => {
-                onApiKeyCheck();
-              }, 1000);
+                onApiKeyRequired(data.missing_keys, newModel, newModel, 'memory', retryFunction);
+              }, 500);
             }
+          } else {
+            // Show error message for other types of failures
+            let errorMessage = data.message || 'Failed to set memory manager model';
+            setMemoryModelUpdateMessage(`❌ ${errorMessage}`);
+            console.error('Memory model set failed:', data);
           }
-          setMemoryModelUpdateMessage(`❌ ${errorMessage}`);
-          console.error('Memory model set failed:', data);
         }
       } else {
         const errorData = await response.text();
@@ -561,11 +600,15 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
   // Combine base models with custom models
   const models = [...baseModels, ...customModels];
 
-  // Memory models are restricted to specific Gemini models only, but also include custom models
+  // Memory models support both Gemini and OpenAI models, plus custom models
   const baseMemoryModels = [
     'gemini-2.0-flash',
     'gemini-2.5-flash',
-    'gemini-2.5-flash-lite'
+    'gemini-2.5-flash-lite',
+    'gpt-4o-mini',
+    'gpt-4o',
+    'gpt-4.1-mini',
+    'gpt-4.1',
   ];
 
   // Combine base memory models with custom models
@@ -619,16 +662,16 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
   return (
     <div className="settings-panel">
       <div className="settings-header">
-        <h2>Settings</h2>
-        <p>Configure your MIRIX assistant</p>
+        <h2>{t('settings.title')}</h2>
+        <p>{t('settings.subtitle')}</p>
       </div>
 
       <div className="settings-content">
         <div className="settings-section">
-          <h3>Model Configuration</h3>
+          <h3>{t('settings.sections.model')}</h3>
           
           <div className="setting-item">
-            <label htmlFor="model-select">Chat Agent Model</label>
+            <label htmlFor="model-select">{t('settings.chatModel')}</label>
             <div className="model-select-container">
               <select
                 id="model-select"
@@ -646,14 +689,14 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
               <button
                 className="add-model-button"
                 onClick={() => setShowLocalModelModal(true)}
-                title="Add your own deployed model"
+                title={t('settings.descriptions.addModelTooltip')}
                 disabled={isChangingModel}
               >
-                Add
+                {t('settings.add')}
               </button>
             </div>
             <span className="setting-description">
-              {isChangingModel ? 'Changing chat agent model...' : 'Choose the AI model for chat responses'}
+              {isChangingModel ? t('settings.descriptions.changingChatModel') : t('settings.descriptions.chatModel')}
             </span>
             {modelUpdateMessage && (
               <span className={`update-message ${modelUpdateMessage.includes('✅') ? 'success' : modelUpdateMessage.includes('Changing') ? 'info' : 'error'}`}>
@@ -663,7 +706,7 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
           </div>
 
           <div className="setting-item">
-            <label htmlFor="memory-model-select">Memory Manager Model</label>
+            <label htmlFor="memory-model-select">{t('settings.memoryModel')}</label>
             <div className="model-select-container">
               <select
                 id="memory-model-select"
@@ -681,14 +724,14 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
               <button
                 className="add-model-button"
                 onClick={() => setShowLocalModelModal(true)}
-                title="Add your own deployed model"
+                title={t('settings.descriptions.addModelTooltip')}
                 disabled={isChangingMemoryModel}
               >
-                Add
+                {t('settings.add')}
               </button>
             </div>
             <span className="setting-description">
-              {isChangingMemoryModel ? 'Changing memory manager model...' : 'Choose the AI model for memory management operations'}
+              {isChangingMemoryModel ? t('settings.descriptions.changingMemoryModel') : t('settings.descriptions.memoryModel')}
             </span>
             {memoryModelUpdateMessage && (
               <span className={`update-message ${memoryModelUpdateMessage.includes('✅') ? 'success' : memoryModelUpdateMessage.includes('Changing') ? 'info' : 'error'}`}>
@@ -699,13 +742,13 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
 
           {/* Persona Display/Editor */}
           <div className="setting-item persona-container">
-            <label>Persona</label>
+            <label>{t('settings.persona')}</label>
             
             {!isEditingPersona ? (
               /* Display Mode */
               <div className="persona-display-mode">
                 <div className="persona-display-text">
-                  {selectedPersonaText || 'Loading persona...'}
+                  {selectedPersonaText || t('settings.descriptions.loadingPersona')}
                 </div>
                 <button
                   onClick={() => {
@@ -715,14 +758,14 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
                   className="edit-persona-btn"
                   disabled={isApplyingTemplate}
                 >
-                  ✏️ Edit
+                  ✏️ {t('settings.personaEdit')}
                 </button>
               </div>
             ) : (
               /* Edit Mode */
               <div className="persona-edit-mode">
                 <div className="persona-template-selector">
-                  <label htmlFor="persona-select">Apply Template</label>
+                  <label htmlFor="persona-select">{t('settings.applyTemplate')}</label>
                   <select
                     id="persona-select"
                     value={selectedTemplateInEdit}
@@ -737,18 +780,18 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
                     ))}
                   </select>
                   <span className="setting-description">
-                    {isApplyingTemplate ? 'Loading template...' : 'Choose a template to load into the editor'}
+                    {isApplyingTemplate ? t('settings.descriptions.loadingTemplate') : t('settings.descriptions.templateSelector')}
                   </span>
                 </div>
                 
                 <div className="persona-text-editor">
-                  <label htmlFor="persona-text">Edit Persona Text</label>
+                  <label htmlFor="persona-text">{t('settings.editPersonaText')}</label>
                   <textarea
                     id="persona-text"
                     value={selectedPersonaText}
                     onChange={handlePersonaTextChange}
                     className="persona-textarea"
-                    placeholder="Enter your custom persona..."
+                    placeholder={t('settings.descriptions.personaPlaceholder')}
                     rows={6}
                     disabled={isApplyingTemplate}
                   />
@@ -760,7 +803,7 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
                     disabled={isUpdatingPersona || isApplyingTemplate}
                     className="save-persona-btn"
                   >
-                    {isUpdatingPersona ? 'Saving...' : '💾 Save'}
+                    {isUpdatingPersona ? t('settings.states.saving') : `💾 ${t('settings.buttons.save')}`}
                   </button>
                   <button
                     onClick={() => {
@@ -771,7 +814,7 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
                     className="cancel-persona-btn"
                     disabled={isUpdatingPersona || isApplyingTemplate}
                   >
-                    Cancel
+                    {t('settings.buttons.cancel')}
                   </button>
                   {updateMessage && (
                     <span className={`update-message ${updateMessage.includes('✅') ? 'success' : updateMessage.includes('Applying') || updateMessage.includes('Updating') ? 'info' : 'error'}`}>
@@ -784,18 +827,35 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
             
             <span className="setting-description">
               {isEditingPersona 
-                ? 'Apply a template or customize the persona text to define how the assistant behaves.'
-                : 'This shows the agent\'s current active persona. Click Edit to modify it.'
+                ? t('settings.descriptions.personaEdit')
+                : t('settings.descriptions.personaDisplay')
               }
             </span>
           </div>
         </div>
 
         <div className="settings-section">
-          <h3>Preferences</h3>
+          <h3>{t('settings.sections.preferences')}</h3>
+          
+          {/* Language */}
+          <div className="setting-item">
+            <label htmlFor="language-select">{t('settings.language')}</label>
+            <select
+              id="language-select"
+              value={i18n.language?.startsWith('zh') ? 'zh' : 'en'}
+              onChange={(e) => i18n.changeLanguage(e.target.value)}
+              className="setting-select"
+            >
+              <option value="en">English</option>
+              <option value="zh">中文</option>
+            </select>
+            <span className="setting-description">
+              {t('settings.languageDescription')}
+            </span>
+          </div>
           
           <div className="setting-item">
-            <label htmlFor="timezone-select">Timezone</label>
+            <label htmlFor="timezone-select">{t('settings.timezone')}</label>
             <select
               id="timezone-select"
               value={settings.timezone}
@@ -810,7 +870,7 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
               ))}
             </select>
             <span className="setting-description">
-              {isChangingTimezone ? 'Changing timezone...' : 'Your local timezone for timestamps'}
+              {isChangingTimezone ? t('settings.descriptions.changingTimezone') : t('settings.descriptions.timezone')}
             </span>
             {timezoneUpdateMessage && (
               <span className={`update-message ${timezoneUpdateMessage.includes('✅') ? 'success' : timezoneUpdateMessage.includes('Changing') ? 'info' : 'error'}`}>
@@ -821,10 +881,10 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
         </div>
 
         <div className="settings-section">
-          <h3>API Keys</h3>
+          <h3>{t('settings.sections.apiKeys')}</h3>
           
           <div className="setting-item">
-            <label>API Key Management</label>
+            <label>{t('settings.apiKeyManagement')}</label>
             <div className="api-key-actions">
               <button
                 onClick={() => {
@@ -835,7 +895,7 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
                 }}
                 className="api-key-update-btn"
               >
-                🔧 Update API Keys
+                {`🔧 ${t('settings.updateApiKeys')}`}
               </button>
               {apiKeyMessage && (
                 <span className={`update-message ${apiKeyMessage.includes('✅') ? 'success' : apiKeyMessage.includes('Checking') ? 'info' : 'error'}`}>
@@ -844,29 +904,29 @@ const SettingsPanel = ({ settings, onSettingsChange, onApiKeyCheck, isVisible })
               )}
             </div>
             <span className="setting-description">
-              Configure and update your API keys for different AI models and services.
+              {t('settings.descriptions.apiKeyManagement')}
             </span>
           </div>
         </div>
 
         <div className="settings-section">
-          <h3>About</h3>
+          <h3>{t('settings.sections.about')}</h3>
           <div className="about-info">
-            <p><strong>MIRIX Desktop</strong></p>
-            <p>Version 0.1.1</p>
-            <p>AI Assistant powered by advanced language models</p>
+            <p><strong>{t('settings.about.name')}</strong></p>
+            <p>{t('settings.about.version')} 0.1.2</p>
+            <p>{t('settings.about.description')}</p>
             <div className="about-links">
               <button 
                 className="link-button"
                 onClick={() => window.open('https://docs.mirix.io', '_blank')}
               >
-                📖 Documentation
+                📖 {t('settings.about.docs')}
               </button>
               <button 
                 className="link-button"
                 onClick={() => window.open('https://github.com/Mirix-AI/MIRIX/issues', '_blank')}
               >
-                🐛 Report Issue
+                🐛 {t('settings.about.reportIssue')}
               </button>
             </div>
           </div>
