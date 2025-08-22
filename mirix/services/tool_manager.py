@@ -4,9 +4,9 @@ from typing import List, Optional
 
 from mirix.constants import (
     CORE_MEMORY_TOOLS, BASE_TOOLS, 
-    EPISODIC_MEMORY_TOOLS, CHAT_AGENT_TOOLS,
+    EPISODIC_MEMORY_TOOLS, CHAT_AGENT_TOOLS, EXTRAS_TOOLS,
     PROCEDURAL_MEMORY_TOOLS, RESOURCE_MEMORY_TOOLS,
-    KNOWLEDGE_VAULT_TOOLS, META_MEMORY_TOOLS, SEMANTIC_MEMORY_TOOLS, UNIVERSAL_MEMORY_TOOLS, ALL_TOOLS
+    KNOWLEDGE_VAULT_TOOLS, META_MEMORY_TOOLS, SEMANTIC_MEMORY_TOOLS, UNIVERSAL_MEMORY_TOOLS, ALL_TOOLS, MCP_TOOLS
 )
 from mirix.functions.functions import derive_openai_json_schema, load_function_set
 from mirix.orm.enums import ToolType
@@ -133,7 +133,7 @@ class ToolManager:
     def upsert_base_tools(self, actor: PydanticUser) -> List[PydanticTool]:
         """Add default tools in base.py"""
         functions_to_schema = {}
-        module_names = ["base", "memory_tools"]
+        module_names = ["base", "memory_tools", "extras"]
 
         for module_name in module_names:
             full_module_name = f"mirix.functions.function_sets.{module_name}"
@@ -161,10 +161,17 @@ class ToolManager:
                 elif name in CORE_MEMORY_TOOLS + EPISODIC_MEMORY_TOOLS + PROCEDURAL_MEMORY_TOOLS + RESOURCE_MEMORY_TOOLS + KNOWLEDGE_VAULT_TOOLS + META_MEMORY_TOOLS + SEMANTIC_MEMORY_TOOLS + UNIVERSAL_MEMORY_TOOLS + CHAT_AGENT_TOOLS:
                     tool_type = ToolType.MIRIX_MEMORY_CORE
                     tags = [tool_type.value]
+                elif name in EXTRAS_TOOLS:
+                    tool_type = ToolType.MIRIX_EXTRA
+                    tags = [tool_type.value]
+                elif name in MCP_TOOLS:
+                    tool_type = ToolType.MIRIX_EXTRA  # MCP wrapper tools are treated as EXTRA tools (currently none)
+                    tags = [tool_type.value, "mcp_wrapper"]
                 else:
                     raise ValueError(
-                        f"Tool name {name} is not in the list of tool names: {BASE_TOOLS + CORE_MEMORY_TOOLS + EPISODIC_MEMORY_TOOLS + PROCEDURAL_MEMORY_TOOLS + KNOWLEDGE_VAULT_TOOLS + RESOURCE_MEMORY_TOOLS + META_MEMORY_TOOLS + SEMANTIC_MEMORY_TOOLS + UNIVERSAL_MEMORY_TOOLS + CHAT_AGENT_TOOLS}"
+                        f"Tool name {name} is not in the list of tool names: {BASE_TOOLS + CORE_MEMORY_TOOLS + EPISODIC_MEMORY_TOOLS + PROCEDURAL_MEMORY_TOOLS + KNOWLEDGE_VAULT_TOOLS + RESOURCE_MEMORY_TOOLS + META_MEMORY_TOOLS + SEMANTIC_MEMORY_TOOLS + UNIVERSAL_MEMORY_TOOLS + CHAT_AGENT_TOOLS + EXTRAS_TOOLS + MCP_TOOLS}"
                     )
+
                 # create to tool
                 tools.append(
                     self.create_or_update_tool(

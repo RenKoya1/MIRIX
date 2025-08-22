@@ -38,7 +38,7 @@ from mirix.agent.agent_states import AgentStates
 from mirix.agent.agent_configs import AGENT_CONFIGS
 from mirix.agent.app_constants import TEMPORARY_MESSAGE_LIMIT, MAXIMUM_NUM_IMAGES_IN_CLOUD, GEMINI_MODELS, OPENAI_MODELS, WITH_REFLEXION_AGENT, WITH_BACKGROUND_AGENT
 from mirix.schemas.mirix_message import MessageType
-
+from mirix.schemas.user import User as PydanticUser
 from mirix import create_client
 from mirix import LLMConfig, EmbeddingConfig
 from mirix.schemas.agent import AgentType
@@ -193,7 +193,8 @@ class AgentWrapper():
 
             core_memory = ChatMemory(
                 human="",
-                persona="You are a helpful personal assitant who can help the user remember things."
+                persona="You are a helpful personal assitant who can help the user remember things.",
+                actor=self.client.user
             )
 
             # Create agents in a loop using imported configuration
@@ -250,6 +251,12 @@ class AgentWrapper():
 
         self.set_model(self.model_name)
         self.set_memory_model(self.model_name)
+        
+        if self.client.server.agent_manager.get_agent_by_id(self.agent_states.agent_state.id, actor=self.client.user).mcp_tools is not None:
+            for mcp_tool in self.client.server.agent_manager.get_agent_by_id(self.agent_states.agent_state.id, actor=self.client.user).mcp_tools:
+                if mcp_tool == 'gmail-native':
+                    # Check and connect to Gmail if credentials exist
+                    self._check_and_connect_gmail()
         
         # Initialize temporary message accumulator for ALL mirix models
         self.temp_message_accumulator = TemporaryMessageAccumulator(
@@ -454,7 +461,7 @@ class AgentWrapper():
             existing_image_names = set([file.name for file in existing_files])
 
             # update the database, delete the files that are in the database but got deleted somehow (potentially due to the calls unrelated to Mirix) in the cloud
-            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids():
+            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids(actor=self.client.user):
                 if file_name not in existing_image_names:
                     self.client.server.cloud_file_mapping_manager.delete_mapping(cloud_file_id=file_name)
                 else:
@@ -463,7 +470,7 @@ class AgentWrapper():
             # after this: every file in database, we can find it in the cloud
             # i.e., local database <= cloud
 
-            cloud_file_names_in_database_set = set(self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids())
+            cloud_file_names_in_database_set = set(self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids(actor=self.client.user))
 
             # since there might be images that belong to other projects, we need to delete those in `existing_files`
             remaining_indices = []
@@ -473,7 +480,7 @@ class AgentWrapper():
             
             # after this, every file in 'existing_files', we can find it in the database
 
-            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids():
+            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids(self.client.user):
                 assert file_name in existing_image_names
 
             existing_files = [existing_files[i] for i in remaining_indices]
@@ -496,9 +503,159 @@ class AgentWrapper():
             self.upload_manager = None
             return False
 
+    def _check_and_connect_gmail(self):
+        """
+        Check if Gmail credentials exist in ~/.mirix and connect to Gmail MCP if they do.
+        Uses the same logic as the fastapi_server.py handle_gmail_connection function.
+        """
+        from pathlib import Path
+        
+        try:
+            # Check if Gmail credentials exist
+            credentials_file = Path.home() / ".mirix" / "gmail_credentials.json"
+            token_file = Path.home() / ".mirix" / "gmail_token.json"
+            
+            if not credentials_file.exists():
+                self.logger.debug("No Gmail credentials found in ~/.mirix")
+                return False
+                
+            # Load credentials
+            with open(credentials_file, 'r') as f:
+                credentials_data = json.loads(f.read())
+                
+            if 'installed' not in credentials_data:
+                self.logger.warning("Invalid Gmail credentials format")
+                return False
+                
+            client_id = credentials_data['installed'].get('client_id')
+            client_secret = credentials_data['installed'].get('client_secret')
+            
+            if not client_id or not client_secret:
+                self.logger.warning("Missing client_id or client_secret in Gmail credentials")
+                return False
+                
+            self.logger.info("Found Gmail credentials, attempting to connect...")
+            
+            # Import required modules for Gmail connection
+            from google.auth.transport.requests import Request
+            from google.oauth2.credentials import Credentials
+            from googleapiclient.discovery import build
+            
+            # Use all required Gmail scopes for full functionality
+            SCOPES = [
+                'https://www.googleapis.com/auth/gmail.readonly',
+                'https://www.googleapis.com/auth/gmail.send',
+                'https://www.googleapis.com/auth/gmail.modify'
+            ]
+            
+            creds = None
+            
+            # Load existing token if available
+            if token_file.exists():
+                try:
+                    creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
+                    
+                    # Check if the token has a refresh token
+                    if not hasattr(creds, 'refresh_token') or not creds.refresh_token:
+                        self.logger.info("Gmail token missing refresh_token, removing invalid token file")
+                        token_file.unlink()
+                        creds = None
+                    else:
+                        self.logger.debug("Successfully loaded existing Gmail credentials")
+                        
+                except Exception as e:
+                    self.logger.info(f"Invalid Gmail token file, will need fresh authentication: {e}")
+                    # Remove invalid token file
+                    if token_file.exists():
+                        token_file.unlink()
+                    creds = None
+            
+            # Always register the Gmail MCP client, even if authentication is pending
+            # This allows the tools to be available and authentication can happen on first use
+            try:
+                from ..functions.mcp_client import GmailServerConfig, get_mcp_client_manager, GmailMCPClient
+                
+                server_name = "gmail-native"
+                config = GmailServerConfig(
+                    server_name=server_name,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    token_file=str(token_file)
+                )
+                
+                # Create Gmail MCP client
+                client = GmailMCPClient(config)
+                
+                # Try to establish connection if credentials are available and valid
+                gmail_service = None
+                if creds and creds.valid:
+                    try:
+                        gmail_service = build('gmail', 'v1', credentials=creds)
+                        client.gmail_service = gmail_service
+                        client.credentials = creds
+                        self.logger.info("✅ Gmail API connection established")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to build Gmail service: {e}")
+                elif creds and creds.expired and creds.refresh_token:
+                    try:
+                        creds.refresh(Request())
+                        gmail_service = build('gmail', 'v1', credentials=creds)
+                        client.gmail_service = gmail_service
+                        client.credentials = creds
+                        # Save refreshed credentials
+                        with open(token_file, 'w') as token:
+                            token.write(creds.to_json())
+                        self.logger.info("✅ Gmail credentials refreshed and API connected")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to refresh Gmail credentials: {e}")
+                
+                # Always mark as initialized - authentication will happen on tool use if needed
+                client.initialized = True
+                
+                # Add to MCP manager
+                mcp_manager = get_mcp_client_manager()
+                mcp_manager.clients[server_name] = client
+                mcp_manager.server_configs[server_name] = config
+                
+                # Save configuration to disk for persistence
+                mcp_manager._save_persistent_connections()
+                
+                # Register tools for this server with the current user
+                try:
+                    from ..services.mcp_tool_registry import get_mcp_tool_registry
+                    mcp_tool_registry = get_mcp_tool_registry()
+                    registered_tools = mcp_tool_registry.register_mcp_tools(self.client.user, [server_name])
+                    
+                    # Add MCP tool to the current chat agent if available
+                    if hasattr(self, 'agent_states') and self.agent_states.agent_state:
+                        self.client.server.agent_manager.add_mcp_tool(
+                            agent_id=self.agent_states.agent_state.id,
+                            mcp_tool_name=server_name,
+                            tool_ids=list(set([tool.id for tool in registered_tools] + 
+                                [tool.id for tool in self.client.server.agent_manager.get_agent_by_id(
+                                    self.agent_states.agent_state.id, actor=self.client.user).tools])),
+                            actor=self.client.user
+                        )
+                        self.logger.info(f"✅ Registered {len(registered_tools)} Gmail tools with chat agent")
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to register tools for Gmail server: {e}")
+                
+                auth_status = "with authentication" if gmail_service else "pending authentication"
+                self.logger.info(f"✅ Gmail MCP client '{server_name}' registered {auth_status}")
+                return True
+                
+            except Exception as e:
+                self.logger.warning(f"Failed to register Gmail MCP client: {e}")
+                return False
+                
+        except Exception as e:
+            self.logger.warning(f"Error checking Gmail credentials: {e}")
+            return False
+
     def _process_existing_uploaded_files(self):
         """Process any existing uploaded files for Gemini models."""
-        uploaded_mappings = self.client.server.cloud_file_mapping_manager.list_files_with_status(status='uploaded')
+        uploaded_mappings = self.client.server.cloud_file_mapping_manager.list_files_with_status(status='uploaded', actor=self.client.user)
 
         count = 0
         for mapping in uploaded_mappings:
@@ -511,7 +668,7 @@ class AgentWrapper():
             )
             count += 1
             if count == TEMPORARY_MESSAGE_LIMIT:
-                self.temp_message_accumulator.absorb_content_into_memory(self.agent_states)
+                self.temp_message_accumulator.absorb_content_into_memory(self.agent_states, user_id=user_id)
                 count = 0
 
     def delete_files(self, file_names, google_client):
@@ -1486,8 +1643,11 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                       delete_after_upload=True, 
                       specific_timestamps=None,
                       display_intermediate_message=None,
+                      request_user_confirmation=None,
                       force_absorb_content=False,
-                      async_upload=True):
+                      async_upload=True,
+                      is_screen_monitoring=False,
+                      user_id=None):
 
         # Check if Gemini features are required but not available
         if self.model_name in GEMINI_MODELS and not self.is_gemini_client_initialized():
@@ -1535,12 +1695,12 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             ready_messages = self.temp_message_accumulator.should_absorb_content()
             if force_absorb_content or ready_messages:
                 t1 = time.time()
-                # Pass the ready messages to absorb_content_into_memory if available
+                # Pass the ready messages to absorb_content_into_memory if availabl, user_id=user_ide
                 if ready_messages:
-                    self.temp_message_accumulator.absorb_content_into_memory(self.agent_states, ready_messages)
+                    self.temp_message_accumulator.absorb_content_into_memory(self.agent_states, ready_messages, user_id=user_id)
                 else:
                     # Force absorb with whatever is available
-                    self.temp_message_accumulator.absorb_content_into_memory(self.agent_states)
+                    self.temp_message_accumulator.absorb_content_into_memory(self.agent_states, user_id=user_id)
                 t2 = time.time()
                 self.logger.info(f"Time taken to absorb content into memory: {t2 - t1} seconds")
                 self.clear_old_screenshots()
@@ -1586,7 +1746,7 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                         else:
                             # For non-GEMINI models, convert local file paths to base64
                             try:
-                                source_text = f"; Screenshot from App: {source_text}" if source else ""
+                                source_text = f"; Screenshot from App: {source}" if source else ""
                                 extra_messages.append({
                                     'type': 'text',
                                     'text': f"Timestamp: {timestamp}; Image Index {idx}" + source_text
@@ -1620,8 +1780,10 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                 self.client,
                 self.agent_states.agent_state.id,
                 {
+                    'user_id': user_id,
                     'message': message,
                     'display_intermediate_message': display_intermediate_message,
+                    'request_user_confirmation': request_user_confirmation,
                     'force_response': True,
                     'existing_file_uris': set(list(self.uri_to_create_time.keys())),
                     'extra_messages': extra_messages,
@@ -1666,6 +1828,10 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             
             # Add conversation to accumulator
             self.temp_message_accumulator.add_user_conversation(message, response_text)
+
+            if not is_screen_monitoring:
+                # we need to call meta memory manager to update the memory
+                self.temp_message_accumulator.absorb_content_into_memory(self.agent_states, user_id=user_id)
             
             return response_text
 
@@ -1845,11 +2011,11 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             self.logger.info(f"# of Existing files in Google Clouds: {len(existing_image_names)}")
 
             # Sync database with cloud files
-            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids():
+            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids(actor=self.client.user):
                 if file_name not in existing_image_names:
                     self.client.server.cloud_file_mapping_manager.delete_mapping(cloud_file_id=file_name)
 
-            cloud_file_names_in_database_set = set(self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids())
+            cloud_file_names_in_database_set = set(self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids(actor=self.client.user))
 
             # Filter files that belong to this project
             remaining_indices = []
@@ -2165,7 +2331,7 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                         'organization_id': memory.organization_id,
                         'tree_path': json.dumps(getattr(memory, 'tree_path', [])),
                         'metadata': json.dumps(memory.metadata_),
-                        'last_modify': json.dumps(getattr(memory, 'last_modify', {}))
+                        'last_modify': json.dumps(self._serialize_last_modify(getattr(memory, 'last_modify', {})))
                     }
                     
                     # Add embeddings if requested
@@ -2204,7 +2370,7 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                         'organization_id': memory.organization_id,
                         'tree_path': json.dumps(getattr(memory, 'tree_path', [])),
                         'metadata': json.dumps(memory.metadata_),
-                        'last_modify': json.dumps(getattr(memory, 'last_modify', {}))
+                        'last_modify': json.dumps(self._serialize_last_modify(getattr(memory, 'last_modify', {})))
                     }
                     
                     # Add embeddings if requested
@@ -2244,7 +2410,7 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                         'organization_id': memory.organization_id,
                         'tree_path': json.dumps(getattr(memory, 'tree_path', [])),
                         'metadata': json.dumps(memory.metadata_),
-                        'last_modify': json.dumps(getattr(memory, 'last_modify', {}))
+                        'last_modify': json.dumps(self._serialize_last_modify(getattr(memory, 'last_modify', {})))
                     }
                     
                     # Add embeddings if requested
@@ -2284,7 +2450,7 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                         'organization_id': memory.organization_id,
                         'tree_path': json.dumps(getattr(memory, 'tree_path', [])),
                         'metadata': json.dumps(memory.metadata_),
-                        'last_modify': json.dumps(getattr(memory, 'last_modify', {}))
+                        'last_modify': json.dumps(self._serialize_last_modify(getattr(memory, 'last_modify', {})))
                     }
                     
                     # Add embeddings if requested
@@ -2325,7 +2491,7 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                         'organization_id': memory.organization_id,
                         'tree_path': json.dumps(getattr(memory, 'tree_path', [])),
                         'metadata': json.dumps(memory.metadata_),
-                        'last_modify': json.dumps(getattr(memory, 'last_modify', {}))
+                        'last_modify': json.dumps(self._serialize_last_modify(getattr(memory, 'last_modify', {})))
                     }
                     
                     # Add embeddings if requested
@@ -2377,7 +2543,7 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             
         return result
             
-    def export_memories_to_excel(self, file_path: str, memory_types: list = None, include_embeddings: bool = False) -> dict:
+    def export_memories_to_excel(self, actor: PydanticUser, file_path: str, memory_types: list = None, include_embeddings: bool = False) -> dict:
         """
         Export selected memory types to an Excel file with separate sheets for each memory type.
         
@@ -2417,13 +2583,13 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                 for memory_type in memory_types:
                     try:
                         if memory_type == 'episodic':
-                            memories, count = self._export_episodic_memories(include_embeddings)
+                            memories, count = self._export_episodic_memories(actor=actor, include_embeddings=include_embeddings)
                         elif memory_type == 'semantic':
-                            memories, count = self._export_semantic_memories(include_embeddings)
+                            memories, count = self._export_semantic_memories(actor=actor, include_embeddings=include_embeddings)
                         elif memory_type == 'procedural':
-                            memories, count = self._export_procedural_memories(include_embeddings)
+                            memories, count = self._export_procedural_memories(actor=actor, include_embeddings=include_embeddings)
                         elif memory_type == 'resource':
-                            memories, count = self._export_resource_memories(include_embeddings)
+                            memories, count = self._export_resource_memories(actor=actor, include_embeddings=include_embeddings)
                         else:
                             self.logger.warning(f"Unknown memory type: {memory_type}")
                             continue
@@ -2470,10 +2636,24 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             
         return result
     
-    def _export_episodic_memories(self, include_embeddings: bool = False) -> tuple:
+    def _serialize_last_modify(self, last_modify_dict):
+        """Helper function to properly serialize last_modify field with datetime objects"""
+        if not last_modify_dict:
+            return {}
+        
+        serialized = last_modify_dict.copy()
+        if 'timestamp' in serialized and serialized['timestamp'] is not None:
+            # Check if timestamp is a datetime object and convert to ISO string
+            timestamp = serialized['timestamp']
+            if hasattr(timestamp, 'isoformat'):
+                serialized['timestamp'] = timestamp.isoformat()
+        return serialized
+    
+    def _export_episodic_memories(self, actor: PydanticUser, include_embeddings: bool = False) -> tuple:
         """Export episodic memories and return (memories_list, count)"""
         try:
             episodic_memories = self.client.server.episodic_memory_manager.list_episodic_memory(
+                actor=actor,
                 agent_state=self.agent_states.episodic_memory_agent_state,
                 limit=None
             )
@@ -2482,8 +2662,8 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             for memory in episodic_memories:
                 row = {
                     'id': memory.id,
-                    'created_at': memory.created_at,
-                    'occurred_at': getattr(memory, 'occurred_at', None),
+                    'created_at': memory.created_at.isoformat() if memory.created_at else None,
+                    'occurred_at': getattr(memory, 'occurred_at', None).isoformat() if getattr(memory, 'occurred_at', None) else None,
                     'event_type': getattr(memory, 'event_type', None),
                     'actor': getattr(memory, 'actor', None),
                     'summary': getattr(memory, 'summary', None),
@@ -2491,7 +2671,8 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                     'organization_id': memory.organization_id,
                     'tree_path': json.dumps(getattr(memory, 'tree_path', [])),
                     'metadata': json.dumps(memory.metadata_),
-                    'last_modify': json.dumps(getattr(memory, 'last_modify', {}))
+                    'last_modify': json.dumps(self._serialize_last_modify(getattr(memory, 'last_modify', {}))),
+                    'user_id': memory.user_id
                 }
                 
                 if include_embeddings:
@@ -2506,10 +2687,11 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             self.logger.error(f"Error exporting episodic memories: {e}")
             return [], 0
     
-    def _export_semantic_memories(self, include_embeddings: bool = False) -> tuple:
+    def _export_semantic_memories(self, actor: PydanticUser, include_embeddings: bool = False) -> tuple:
         """Export semantic memories and return (memories_list, count)"""
         try:
             semantic_memories = self.client.server.semantic_memory_manager.list_semantic_items(
+                actor=actor,
                 agent_state=self.agent_states.semantic_memory_agent_state,
                 limit=None
             )
@@ -2518,7 +2700,7 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             for memory in semantic_memories:
                 row = {
                     'id': memory.id,
-                    'created_at': memory.created_at,
+                    'created_at': memory.created_at.isoformat() if memory.created_at else None,
                     'name': getattr(memory, 'name', None),
                     'summary': getattr(memory, 'summary', None),
                     'details': getattr(memory, 'details', None),
@@ -2526,7 +2708,8 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                     'organization_id': memory.organization_id,
                     'tree_path': json.dumps(getattr(memory, 'tree_path', [])),
                     'metadata': json.dumps(memory.metadata_),
-                    'last_modify': json.dumps(getattr(memory, 'last_modify', {}))
+                    'last_modify': json.dumps(self._serialize_last_modify(getattr(memory, 'last_modify', {}))),
+                    'user_id': memory.user_id
                 }
                 
                 if include_embeddings:
@@ -2542,10 +2725,11 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             self.logger.error(f"Error exporting semantic memories: {e}")
             return [], 0
     
-    def _export_procedural_memories(self, include_embeddings: bool = False) -> tuple:
+    def _export_procedural_memories(self, actor: PydanticUser, include_embeddings: bool = False) -> tuple:
         """Export procedural memories and return (memories_list, count)"""
         try:
             procedural_memories = self.client.server.procedural_memory_manager.list_procedures(
+                actor=actor,
                 agent_state=self.agent_states.procedural_memory_agent_state,
                 limit=None
             )
@@ -2554,14 +2738,15 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             for memory in procedural_memories:
                 row = {
                     'id': memory.id,
-                    'created_at': memory.created_at,
+                    'created_at': memory.created_at.isoformat() if memory.created_at else None,
                     'entry_type': getattr(memory, 'entry_type', None),
                     'summary': getattr(memory, 'summary', None),
                     'steps': getattr(memory, 'steps', None),
                     'organization_id': memory.organization_id,
                     'tree_path': json.dumps(getattr(memory, 'tree_path', [])),
                     'metadata': json.dumps(memory.metadata_),
-                    'last_modify': json.dumps(getattr(memory, 'last_modify', {}))
+                    'last_modify': json.dumps(self._serialize_last_modify(getattr(memory, 'last_modify', {}))),
+                    'user_id': memory.user_id
                 }
                 
                 if include_embeddings:
@@ -2576,10 +2761,11 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             self.logger.error(f"Error exporting procedural memories: {e}")
             return [], 0
     
-    def _export_resource_memories(self, include_embeddings: bool = False) -> tuple:
+    def _export_resource_memories(self, actor: PydanticUser, include_embeddings: bool = False) -> tuple:
         """Export resource memories and return (memories_list, count)"""
         try:
             resource_memories = self.client.server.resource_memory_manager.list_resources(
+                actor=actor,
                 agent_state=self.agent_states.resource_memory_agent_state,
                 limit=None
             )
@@ -2588,7 +2774,7 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             for memory in resource_memories:
                 row = {
                     'id': memory.id,
-                    'created_at': memory.created_at,
+                    'created_at': memory.created_at.isoformat() if memory.created_at else None,
                     'title': getattr(memory, 'title', None),
                     'summary': getattr(memory, 'summary', None),
                     'content': getattr(memory, 'content', None),
@@ -2596,7 +2782,8 @@ Please perform this analysis and create new memories as appropriate. Provide a d
                     'organization_id': memory.organization_id,
                     'tree_path': json.dumps(getattr(memory, 'tree_path', [])),
                     'metadata': json.dumps(memory.metadata_),
-                    'last_modify': json.dumps(getattr(memory, 'last_modify', {}))
+                    'last_modify': json.dumps(self._serialize_last_modify(getattr(memory, 'last_modify', {}))),
+                    'user_id': memory.user_id
                 }
                 
                 if include_embeddings:
@@ -2609,4 +2796,70 @@ Please perform this analysis and create new memories as appropriate. Provide a d
         except Exception as e:
             self.logger.error(f"Error exporting resource memories: {e}")
             return [], 0
+
+    def create_user(self, name: str, set_as_active: bool = False) -> dict:
+        """
+        Create a new user in the system or activate existing user with the same name.
+        
+        Args:
+            name: The name for the new user
+            set_as_active: Whether to set this user as the active user
             
+        Returns:
+            Dictionary with success status, message, and user data
+        """
+        result = {'success': False, 'message': '', 'user': None}
+        
+        try:
+            # Generate a unique user ID
+            import uuid
+            user_id = f"user-{uuid.uuid4()}"
+            
+            # Create the user using the user_manager
+            from mirix.schemas.user import User as PydanticUser
+            from mirix.services.organization_manager import OrganizationManager
+            
+            # Set current user to inactive if setting new user as active
+            if set_as_active and self.client.user:
+                self.client.server.user_manager.update_user_status(self.client.user.id, "inactive")
+            
+            existing_users = self.client.server.user_manager.list_users()
+            existing_user_names = [user.name for user in existing_users]
+
+            if name not in existing_user_names:
+
+                new_user_data = PydanticUser(
+                    id=user_id,
+                    name=name,
+                    status="active" if set_as_active else "inactive",
+                    timezone="UTC (UTC+00:00)",  # Default timezone
+                    organization_id=OrganizationManager.DEFAULT_ORG_ID
+                )
+                
+                created_user = self.client.server.user_manager.create_user(new_user_data)
+                
+                new_chat_memory = ChatMemory(
+                    persona="You are a helpful personal assitant who can help the user remember things.", 
+                    human="", 
+                    actor=created_user)
+                
+                for block in new_chat_memory.get_blocks():
+                    self.client.server.block_manager.create_or_update_block(block, actor=created_user)
+                
+            else:
+
+                created_user = [user for user in existing_users if user.name == name][0]
+
+            # Switch to new user if set as active
+            if set_as_active:
+                self.client.user = created_user
+            
+            result['success'] = True
+            result['message'] = f"User '{name}' created successfully and set as {'active' if set_as_active else 'inactive'}"
+            result['user'] = created_user
+            
+        except Exception as e:
+            result['message'] = f"Error creating user: {str(e)}"
+            self.logger.error(f"Failed to create user '{name}': {e}")
+            
+        return result

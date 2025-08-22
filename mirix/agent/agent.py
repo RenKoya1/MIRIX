@@ -21,6 +21,7 @@ from mirix.constants import (
     FUNC_FAILED_HEARTBEAT_MESSAGE,
     MIRIX_CORE_TOOL_MODULE_NAME,
     MIRIX_MEMORY_TOOL_MODULE_NAME,
+    MIRIX_EXTRA_TOOL_MODULE_NAME,
     LLM_MAX_TOKENS,
     REQ_HEARTBEAT_MESSAGE,
     CLEAR_HISTORY_AFTER_MEMORY_UPDATE,
@@ -55,6 +56,7 @@ from mirix.schemas.openai.chat_completion_response import Message as ChatComplet
 from mirix.schemas.openai.chat_completion_response import UsageStatistics
 from mirix.schemas.tool import Tool
 from mirix.schemas.tool_rule import TerminalToolRule
+from mirix.schemas.user import User as PydanticUser
 from mirix.schemas.usage import MirixUsageStatistics
 from mirix.schemas.mirix_message_content import TextContent, ImageContent, FileContent, CloudFileContent
 from mirix.services.agent_manager import AgentManager
@@ -252,8 +254,66 @@ class Agent(BaseAgent):
         
         return False
 
+    def _execute_mcp_tool(self, function_name: str, function_args: dict, target_mirix_tool: Tool,
+                          request_user_confirmation: Optional[Callable] = None) -> str:
+        """Execute MCP tool using the auto-generated source code."""
+        try:
+
+            # Check if this is a Gmail send operation that needs confirmation
+            if function_name == 'gmail_native_gmail_send_email' and request_user_confirmation:
+                # Prepare email details for confirmation
+                email_details = {
+                    'to': function_args.get('to', ''),
+                    'subject': function_args.get('subject', ''),
+                    'body': function_args.get('body', ''),
+                    'cc': function_args.get('cc', []),
+                    'bcc': function_args.get('bcc', []),
+                    'attachments': function_args.get('attachments', [])
+                }
+                
+                # Request confirmation from user
+                confirmed = request_user_confirmation('gmail_send', email_details)
+                
+                if not confirmed:
+                    return "Email send cancelled by user"
+            
+            # MCP tools have auto-generated source code that we need to execute directly
+            source_code = target_mirix_tool.source_code
+            if not source_code:
+                return f"Error: MCP tool '{function_name}' has no source code"
+            
+            # Create a local namespace with the required imports and self/agent_state
+            local_namespace = {
+                'self': self,
+                'agent_state': self.agent_state,
+                'Optional': Optional,  # Import Optional type
+            }
+            
+            # Execute the auto-generated source code
+            exec(source_code, globals(), local_namespace)
+            
+            # Get the function name from the tool (replace dots/dashes with underscores)
+            func_name = function_name.replace('.', '_').replace('-', '_')
+            
+            if func_name not in local_namespace:
+                return f"Error: Function '{func_name}' not found in MCP tool source code"
+            
+            # Call the function with the provided arguments, including self and agent_state
+            callable_func = local_namespace[func_name]
+            function_args['self'] = self
+            function_args['agent_state'] = self.agent_state
+            
+            result = callable_func(**function_args)
+            return str(result)
+            
+        except Exception as e:
+            error_msg = f"Error executing MCP tool '{function_name}': {str(e)}"
+            self.logger.error(error_msg)
+            return error_msg
+
     def execute_tool_and_persist_state(self, function_name: str, function_args: dict, target_mirix_tool: Tool, 
-                                       display_intermediate_message: Optional[Callable] = None) -> str:
+                                       display_intermediate_message: Optional[Callable] = None,
+                                       request_user_confirmation: Optional[Callable] = None) -> str:
         """
         Execute tool modifications and persist the state of the agent.
         Note: only some agent state modifications will be persisted, such as data in the AgentState ORM and block data
@@ -302,6 +362,15 @@ class Agent(BaseAgent):
                 function_response = callable_func(**function_args)
                 if function_name in ['core_memory_append', 'core_memory_rewrite']:
                     self.update_memory_if_changed(agent_state_copy.memory)
+
+            elif target_mirix_tool.tool_type == ToolType.MIRIX_EXTRA:
+                callable_func = get_function_from_module(MIRIX_EXTRA_TOOL_MODULE_NAME, function_name)
+                function_args["self"] = self  # need to attach self to arg since it's dynamically linked
+                function_response = callable_func(**function_args)
+
+            elif target_mirix_tool.tool_type == ToolType.MIRIX_MCP:
+                # Handle MCP tool execution
+                function_response = self._execute_mcp_tool(function_name, function_args, target_mirix_tool, request_user_confirmation)
 
             else:
                 raise ValueError(f"Tool type {target_mirix_tool.tool_type} not supported")
@@ -516,6 +585,7 @@ class Agent(BaseAgent):
         force_response: bool = False,
         retrieved_memories: str = None,
         display_intermediate_message: Optional[Callable] = None,
+        request_user_confirmation: Optional[Callable] = None,
         return_memory_types_without_update: bool = False,
         message_queue: Optional[any] = None,
         chaining: bool = True,
@@ -661,7 +731,8 @@ class Agent(BaseAgent):
 
                     function_response = self.execute_tool_and_persist_state(function_name, function_args, 
                                                                             target_mirix_tool, 
-                                                                            display_intermediate_message=display_intermediate_message)
+                                                                            display_intermediate_message=display_intermediate_message,
+                                                                            request_user_confirmation=request_user_confirmation)
                     
                     if function_name == 'send_message' or function_name == 'finish_memory_update':
                         assert tool_call_idx == len(response_message.tool_calls) - 1, f"{function_name} must be the last tool call"
@@ -798,7 +869,7 @@ class Agent(BaseAgent):
                     memory_item_str = None
 
                     if self.agent_state.name == 'episodic_memory_agent':
-                        memory_item = self.episodic_memory_manager.get_most_recently_updated_event(timezone_str=self.user_manager.get_user_by_id(self.user.id).timezone)
+                        memory_item = self.episodic_memory_manager.get_most_recently_updated_event(actor=self.user, timezone_str=self.user_manager.get_user_by_id(self.user.id).timezone)
                         if memory_item:
                             memory_item = memory_item[0]
                             memory_item_str = ''
@@ -811,7 +882,7 @@ class Agent(BaseAgent):
                             memory_item_str = memory_item_str.strip()
                             
                     elif self.agent_state.name == 'procedural_memory_agent':
-                        memory_item = self.procedural_memory_manager.get_most_recently_updated_item(timezone_str=self.user_manager.get_user_by_id(self.user.id).timezone)
+                        memory_item = self.procedural_memory_manager.get_most_recently_updated_item(actor=self.user, timezone_str=self.user_manager.get_user_by_id(self.user.id).timezone)
                         if memory_item:
                             memory_item = memory_item[0]
                             memory_item_str = ''
@@ -824,7 +895,7 @@ class Agent(BaseAgent):
                             memory_item_str = memory_item_str.strip()
                             
                     elif self.agent_state.name == 'resource_memory_agent':
-                        memory_item = self.resource_memory_manager.get_most_recently_updated_item(timezone_str=self.user_manager.get_user_by_id(self.user.id).timezone)
+                        memory_item = self.resource_memory_manager.get_most_recently_updated_item(actor=self.user, timezone_str=self.user_manager.get_user_by_id(self.user.id).timezone)
                         if memory_item:
                             memory_item = memory_item[0]
                             memory_item_str = ''
@@ -838,7 +909,7 @@ class Agent(BaseAgent):
                             memory_item_str = memory_item_str.strip()
                             
                     elif self.agent_state.name == 'knowledge_vault_agent':
-                        memory_item = self.knowledge_vault_manager.get_most_recently_updated_item(timezone_str=self.user_manager.get_user_by_id(self.user.id).timezone)
+                        memory_item = self.knowledge_vault_manager.get_most_recently_updated_item(actor=self.user, timezone_str=self.user_manager.get_user_by_id(self.user.id).timezone)
                         
                         # Check if finish_memory_update was one of the executed functions
                         if 'finish_memory_update' in executed_function_names and memory_item is None:
@@ -857,7 +928,7 @@ class Agent(BaseAgent):
                             memory_item_str = memory_item_str.strip()
                             
                     elif self.agent_state.name == 'semantic_memory_agent':
-                        memory_item = self.semantic_memory_manager.get_most_recently_updated_item(timezone_str=self.user_manager.get_user_by_id(self.user.id).timezone)
+                        memory_item = self.semantic_memory_manager.get_most_recently_updated_item(actor=self.user, timezone_str=self.user_manager.get_user_by_id(self.user.id).timezone)
                         if memory_item:
                             memory_item = memory_item[0]
                             memory_item_str = ''
@@ -943,9 +1014,13 @@ class Agent(BaseAgent):
         chaining: bool = True,
         max_chaining_steps: Optional[int] = None,
         extra_messages: Optional[List[dict]] = None,
+        user_id: Optional[str] = None,
         **kwargs,
     ) -> MirixUsageStatistics:
         """Run Agent.step in a loop, handling chaining via contine_chaining requests and function failures"""
+
+        if user_id:
+            self.user = self.user_manager.get_user_by_id(user_id)
 
         max_chaining_steps = max_chaining_steps or MAX_CHAINING_STEPS
 
@@ -1173,30 +1248,30 @@ class Agent(BaseAgent):
         # Retrieve core memory
         if self.agent_state.name == 'core_memory_agent' or "core" not in retrieved_memories:
             current_persisted_memory = Memory(
-                blocks=[self.block_manager.get_block_by_id(block.id, actor=self.user) for block in self.agent_state.memory.get_blocks()]
+                blocks=[self.block_manager.get_block_by_id(block.id, actor=self.user) for block in self.block_manager.get_blocks(actor=self.user)]
             )
             core_memory = current_persisted_memory.compile()
             retrieved_memories['core'] = core_memory
-        
+
         if self.agent_state.name == 'knowledge_vault' or 'knowledge_vault' not in retrieved_memories:
             if self.agent_state.name == 'knowledge_vault' or self.agent_state.name == 'reflexion_agent':
-                current_knowledge_vault = self.knowledge_vault_manager.list_knowledge(agent_state=self.agent_state, embedded_text=embedded_text, query=key_words, search_field='caption', search_method=search_method, limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
+                current_knowledge_vault = self.knowledge_vault_manager.list_knowledge(agent_state=self.agent_state, actor=self.user, embedded_text=embedded_text, query=key_words, search_field='caption', search_method=search_method, limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
             else:
-                current_knowledge_vault = self.knowledge_vault_manager.list_knowledge(agent_state=self.agent_state, embedded_text=embedded_text, query=key_words, search_field='caption', search_method=search_method, limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str, sensitivity=['low', 'medium'])
+                current_knowledge_vault = self.knowledge_vault_manager.list_knowledge(agent_state=self.agent_state, actor=self.user, embedded_text=embedded_text, query=key_words, search_field='caption', search_method=search_method, limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str, sensitivity=['low', 'medium'])
             
             knowledge_vault_memory = ''
             if len(current_knowledge_vault) > 0:
                 for idx, knowledge_vault_item in enumerate(current_knowledge_vault):
                     knowledge_vault_memory += f"[{idx}] Knowledge Vault Item ID: {knowledge_vault_item.id}; Caption: {knowledge_vault_item.caption}\n"
             retrieved_memories['knowledge_vault'] = {
-                'total_number_of_items': self.knowledge_vault_manager.get_total_number_of_items(),
+                'total_number_of_items': self.knowledge_vault_manager.get_total_number_of_items(actor=self.user),
                 'current_count': len(current_knowledge_vault),
                 'text': knowledge_vault_memory
             }
 
         # Retrieve episodic memory
         if self.agent_state.name == 'episodic_memory_agent' or 'episodic' not in retrieved_memories:
-            current_episodic_memory = self.episodic_memory_manager.list_episodic_memory(agent_state=self.agent_state, limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
+            current_episodic_memory = self.episodic_memory_manager.list_episodic_memory(agent_state=self.agent_state, actor=self.user, limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
             episodic_memory = ''
             if len(current_episodic_memory) > 0:
                 for idx, event in enumerate(current_episodic_memory):
@@ -1208,7 +1283,7 @@ class Agent(BaseAgent):
                         
             recent_episodic_memory = episodic_memory.strip()
         
-            most_relevant_episodic_memory = self.episodic_memory_manager.list_episodic_memory(agent_state=self.agent_state, embedded_text=embedded_text, query=key_words, search_field='details', search_method=search_method, limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
+            most_relevant_episodic_memory = self.episodic_memory_manager.list_episodic_memory(agent_state=self.agent_state, actor=self.user, embedded_text=embedded_text, query=key_words, search_field='details', search_method=search_method, limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
             most_relevant_episodic_memory_str = ''
             if len(most_relevant_episodic_memory) > 0:
                 for idx, event in enumerate(most_relevant_episodic_memory):
@@ -1219,7 +1294,7 @@ class Agent(BaseAgent):
                         most_relevant_episodic_memory_str += f"[{idx}] Timestamp: {event.occurred_at.strftime('%Y-%m-%d %H:%M:%S')} - {event.summary}{tree_path_str}  (Details: {len(event.details)} Characters)\n"
             relevant_episodic_memory = most_relevant_episodic_memory_str.strip()
             retrieved_memories['episodic'] = {
-                'total_number_of_items': self.episodic_memory_manager.get_total_number_of_items(),
+                'total_number_of_items': self.episodic_memory_manager.get_total_number_of_items(actor=self.user),
                 'recent_count': len(current_episodic_memory),
                 'relevant_count': len(most_relevant_episodic_memory),
                 'recent_episodic_memory': recent_episodic_memory,
@@ -1228,7 +1303,7 @@ class Agent(BaseAgent):
 
         # Retrieve resource memory
         if self.agent_state.name == 'resource_memory_agent' or 'resource' not in retrieved_memories:
-            current_resource_memory = self.resource_memory_manager.list_resources(agent_state=self.agent_state, query=key_words, embedded_text=embedded_text, search_field='summary', search_method=search_method, limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
+            current_resource_memory = self.resource_memory_manager.list_resources(agent_state=self.agent_state, actor=self.user, query=key_words, embedded_text=embedded_text, search_field='summary', search_method=search_method, limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
             resource_memory = ''
             if len(current_resource_memory) > 0:
                 for idx, resource in enumerate(current_resource_memory):
@@ -1239,14 +1314,14 @@ class Agent(BaseAgent):
                         resource_memory += f"[{idx}] Resource Title: {resource.title}; Resource Summary: {resource.summary} Resource Type: {resource.resource_type}{tree_path_str}\n"
             resource_memory = resource_memory.strip()
             retrieved_memories['resource'] = {
-                'total_number_of_items': self.resource_memory_manager.get_total_number_of_items(),
+                'total_number_of_items': self.resource_memory_manager.get_total_number_of_items(actor=self.user),
                 'current_count': len(current_resource_memory),
                 'text': resource_memory
             }
 
         # Retrieve procedural memory
         if self.agent_state.name == 'procedural_memory_agent' or 'procedural' not in retrieved_memories:
-            current_procedural_memory = self.procedural_memory_manager.list_procedures(agent_state=self.agent_state, query=key_words, embedded_text=embedded_text, search_field="summary", search_method=search_method,limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
+            current_procedural_memory = self.procedural_memory_manager.list_procedures(agent_state=self.agent_state, actor=self.user, query=key_words, embedded_text=embedded_text, search_field="summary", search_method=search_method,limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
             procedural_memory = ''
             if len(current_procedural_memory) > 0:
                 for idx, procedure in enumerate(current_procedural_memory):
@@ -1257,14 +1332,14 @@ class Agent(BaseAgent):
                         procedural_memory += f"[{idx}] Entry Type: {procedure.entry_type}; Summary: {procedure.summary}{tree_path_str}\n"
             procedural_memory = procedural_memory.strip()
             retrieved_memories['procedural'] = {
-                'total_number_of_items': self.procedural_memory_manager.get_total_number_of_items(),
+                'total_number_of_items': self.procedural_memory_manager.get_total_number_of_items(actor=self.user),
                 'current_count': len(current_procedural_memory),
                 'text': procedural_memory
             }
         
         # Retrieve semantic memory
         if self.agent_state.name == 'semantic_memory_agent' or 'semantic' not in retrieved_memories:
-            current_semantic_memory = self.semantic_memory_manager.list_semantic_items(agent_state=self.agent_state, query=key_words, embedded_text=embedded_text, search_field="details", search_method=search_method,limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
+            current_semantic_memory = self.semantic_memory_manager.list_semantic_items(agent_state=self.agent_state, actor=self.user, query=key_words, embedded_text=embedded_text, search_field="details", search_method=search_method,limit=MAX_RETRIEVAL_LIMIT_IN_SYSTEM, timezone_str=timezone_str)
             semantic_memory = ''
             if len(current_semantic_memory) > 0:
                 for idx, semantic_memory_item in enumerate(current_semantic_memory):
@@ -1276,7 +1351,7 @@ class Agent(BaseAgent):
                         
             semantic_memory = semantic_memory.strip()
             retrieved_memories['semantic'] = {
-                'total_number_of_items': self.semantic_memory_manager.get_total_number_of_items(),
+                'total_number_of_items': self.semantic_memory_manager.get_total_number_of_items(actor=self.user),
                 'current_count': len(current_semantic_memory),
                 'text': semantic_memory
             }
@@ -1312,8 +1387,7 @@ These keywords have been used to retrieve relevant memories from the database.
 """
         user_timezone_str = self.user_manager.get_user_by_id(self.user.id).timezone
         user_tz = pytz.timezone(user_timezone_str.split(" (")[0])
-        # current_time = datetime.now(user_tz).strftime('%Y-%m-%d %H:%M:%S')
-        current_time = "Not Specified"
+        current_time = datetime.now(user_tz).strftime('%Y-%m-%d %H:%M:%S')
         
         keywords = retrieved_memories['key_words']
         core_memory = retrieved_memories['core']
@@ -1378,6 +1452,7 @@ These keywords have been used to retrieve relevant memories from the database.
         topics: Optional[str] = None,
         retrieved_memories: Optional[dict] = None,
         display_intermediate_message: any = None,
+        request_user_confirmation: Optional[Callable] = None,
         put_inner_thoughts_first: bool = True,
         existing_file_uris: Optional[List[str]] = None,
         extra_messages: Optional[List[dict]] = None,
@@ -1393,6 +1468,7 @@ These keywords have been used to retrieve relevant memories from the database.
 
             # Step 0: get in-context messages and get the raw system prompt
             in_context_messages = self.agent_manager.get_in_context_messages(agent_id=self.agent_state.id, actor=self.user)
+
             assert in_context_messages[0].role == MessageRole.system
             raw_system = in_context_messages[0].content[0].text
 
@@ -1446,6 +1522,7 @@ These keywords have been used to retrieve relevant memories from the database.
                     force_response=force_response,
                     retrieved_memories=retrieved_memories,
                     display_intermediate_message=display_intermediate_message,
+                    request_user_confirmation=request_user_confirmation,
                     return_memory_types_without_update=return_memory_types_without_update,
                     message_queue=message_queue,
                     chaining=chaining
@@ -1576,7 +1653,14 @@ These keywords have been used to retrieve relevant memories from the database.
                         extra_messages=extra_messages,
                         topics=topics,
                         retrieved_memories=retrieved_memories,
-                        chaining=chaining
+                        chaining=chaining,
+                        message_queue=message_queue,
+                        initial_message_count=initial_message_count,
+                        return_memory_types_without_update=return_memory_types_without_update,
+                        display_intermediate_message=display_intermediate_message,
+                        request_user_confirmation=request_user_confirmation,
+                        put_inner_thoughts_first=put_inner_thoughts_first,
+                        existing_file_uris=existing_file_uris,
                     )
                 else:
                     err_msg = f"Ran summarizer {summarize_attempt_count - 1} times for agent id={self.agent_state.id}, but messages are still overflowing the context window."

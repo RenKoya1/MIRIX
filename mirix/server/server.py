@@ -557,16 +557,19 @@ class SyncServer(Server):
         existing_file_uris: Optional[List[str]] = None,
         force_response: bool = False,
         display_intermediate_message: any = None,
+        request_user_confirmation: any = None,
         chaining: Optional[bool] = None,
         extra_messages: Optional[List[dict]] = None,
         message_queue: Optional[any] = None,
         retrieved_memories: Optional[dict] = None,
+        user_id: Optional[str] = None,
     ) -> MirixUsageStatistics:
         """Send the input message through the agent"""
         logger.debug(f"Got input messages: {input_messages}")
         mirix_agent = None
         try:
             mirix_agent = self.load_agent(agent_id=agent_id, interface=interface, actor=actor)
+
             if mirix_agent is None:
                 raise KeyError(f"Agent (user={actor.id}, agent={agent_id}) is not loaded")
 
@@ -592,9 +595,11 @@ class SyncServer(Server):
                 force_response=force_response,
                 existing_file_uris=existing_file_uris,
                 display_intermediate_message=display_intermediate_message,
+                request_user_confirmation=request_user_confirmation,
                 put_inner_thoughts_first=put_inner_thoughts_first,
                 extra_messages=extra_messages,
                 message_queue=message_queue,
+                user_id=user_id
             )
 
         except Exception as e:
@@ -835,12 +840,14 @@ class SyncServer(Server):
         metadata: Optional[dict] = None,  # Pass through metadata to interface
         put_inner_thoughts_first: bool = True,
         display_intermediate_message: callable = None,
+        request_user_confirmation: callable = None,
         force_response: bool = False,
         chaining: Optional[bool] = True,
         existing_file_uris: Optional[List[str]] = None,
         extra_messages: Optional[List[dict]] = None,
         message_queue: Optional[any] = None,
         retrieved_memories: Optional[dict] = None,
+        user_id: Optional[str] = None,
     ) -> MirixUsageStatistics:
         """Send a list of messages to the agent."""
 
@@ -857,11 +864,13 @@ class SyncServer(Server):
             force_response=force_response,
             put_inner_thoughts_first=put_inner_thoughts_first,
             display_intermediate_message=display_intermediate_message,
+            request_user_confirmation=request_user_confirmation,
             chaining=chaining,
             existing_file_uris=existing_file_uris,
             extra_messages=extra_messages,
             message_queue=message_queue,
-            retrieved_memories=retrieved_memories
+            retrieved_memories=retrieved_memories,
+            user_id=user_id
         )
 
     # @LockingServer.agent_lock_decorator

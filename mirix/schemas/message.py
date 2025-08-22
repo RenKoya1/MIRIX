@@ -8,8 +8,8 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall as OpenAIToolCall
-from openai.types.chat.chat_completion_message_tool_call import Function as OpenAIFunction
+from mirix.schemas.openai.openai import ToolCall as OpenAIToolCall
+from mirix.schemas.openai.openai import Function as OpenAIFunction
 from pydantic import BaseModel, Field, field_validator
 
 from mirix.constants import DEFAULT_MESSAGE_TOOL, DEFAULT_MESSAGE_TOOL_KWARG, TOOL_CALL_ID_MAX_LEN
@@ -143,6 +143,7 @@ class Message(BaseMessage):
 
     id: str = BaseMessage.generate_id_field()
     organization_id: Optional[str] = Field(None, description="The unique identifier of the organization.")
+    user_id: Optional[str] = Field(None, description="The unique identifier of the user.")
     agent_id: Optional[str] = Field(None, description="The unique identifier of the agent.")
     model: Optional[str] = Field(None, description="The model used to make the function call.")
     # Basic OpenAI-style fields

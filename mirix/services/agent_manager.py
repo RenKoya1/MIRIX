@@ -7,7 +7,7 @@ from sqlalchemy import Select, func, literal, select, union_all
 from mirix.constants import (
     CORE_MEMORY_TOOLS, BASE_TOOLS, MAX_EMBEDDING_DIM,
     EPISODIC_MEMORY_TOOLS, PROCEDURAL_MEMORY_TOOLS, SEMANTIC_MEMORY_TOOLS,
-    RESOURCE_MEMORY_TOOLS, KNOWLEDGE_VAULT_TOOLS, META_MEMORY_TOOLS, UNIVERSAL_MEMORY_TOOLS, CHAT_AGENT_TOOLS, SEARCH_MEMORY_TOOLS
+    RESOURCE_MEMORY_TOOLS, KNOWLEDGE_VAULT_TOOLS, META_MEMORY_TOOLS, UNIVERSAL_MEMORY_TOOLS, CHAT_AGENT_TOOLS, SEARCH_MEMORY_TOOLS, EXTRAS_TOOLS, MCP_TOOLS
 )
 from mirix.embeddings import embedding_model
 from mirix.log import get_logger
@@ -17,6 +17,7 @@ from mirix.orm import Tool as ToolModel
 from mirix.orm.errors import NoResultFound
 from mirix.orm.sandbox_config import AgentEnvironmentVariable as AgentEnvironmentVariableModel
 from mirix.orm.sqlite_functions import adapt_array
+from mirix.orm.enums import ToolType
 from mirix.schemas.agent import AgentState as PydanticAgentState
 from mirix.schemas.agent import AgentType, CreateAgent, UpdateAgent
 from mirix.schemas.block import Block as PydanticBlock
@@ -89,7 +90,7 @@ class AgentManager:
         if agent_create.tools:
             tool_names.extend(agent_create.tools)
         if agent_create.agent_type == AgentType.chat_agent:
-            tool_names.extend(CHAT_AGENT_TOOLS)
+            tool_names.extend(CHAT_AGENT_TOOLS + EXTRAS_TOOLS + MCP_TOOLS)
         if agent_create.agent_type == AgentType.episodic_memory_agent:
             tool_names.extend(EPISODIC_MEMORY_TOOLS + UNIVERSAL_MEMORY_TOOLS)
         if agent_create.agent_type == AgentType.procedural_memory_agent:
@@ -105,7 +106,7 @@ class AgentManager:
         if agent_create.agent_type == AgentType.meta_memory_agent:
             tool_names.extend(META_MEMORY_TOOLS + UNIVERSAL_MEMORY_TOOLS)
         if agent_create.agent_type == AgentType.reflexion_agent:
-            tool_names.extend(SEARCH_MEMORY_TOOLS + CHAT_AGENT_TOOLS + UNIVERSAL_MEMORY_TOOLS)
+            tool_names.extend(SEARCH_MEMORY_TOOLS + CHAT_AGENT_TOOLS + UNIVERSAL_MEMORY_TOOLS + EXTRAS_TOOLS)
 
         # Remove duplicates
         tool_names = list(set(tool_names))
@@ -178,20 +179,32 @@ class AgentManager:
         if agent_state.agent_type == AgentType.meta_memory_agent:
             tool_names.extend(META_MEMORY_TOOLS + UNIVERSAL_MEMORY_TOOLS)
         if agent_state.agent_type == AgentType.chat_agent:
-            tool_names.extend(BASE_TOOLS + CHAT_AGENT_TOOLS)
+            tool_names.extend(BASE_TOOLS + CHAT_AGENT_TOOLS + EXTRAS_TOOLS)
         if agent_state.agent_type == AgentType.reflexion_agent:
-            tool_names.extend(SEARCH_MEMORY_TOOLS + CHAT_AGENT_TOOLS + UNIVERSAL_MEMORY_TOOLS)
+            tool_names.extend(SEARCH_MEMORY_TOOLS + CHAT_AGENT_TOOLS + UNIVERSAL_MEMORY_TOOLS + EXTRAS_TOOLS)
 
         ## extract the existing tool names for the agent
         existing_tools = agent_state.tools
         existing_tool_names = set([tool.name for tool in existing_tools])
         existing_tool_ids = [tool.id for tool in existing_tools]
         
+        # Separate MCP tools from native tools - preserve MCP tools
+        mcp_tools = [tool for tool in existing_tools if tool.tool_type == ToolType.MIRIX_MCP]
+        mcp_tool_names = set([tool.name for tool in mcp_tools])
+        mcp_tool_ids = [tool.id for tool in mcp_tools]
+        
         new_tool_names = [tool_name for tool_name in tool_names if tool_name not in existing_tool_names]
-        tool_names_to_remove = [tool_name for tool_name in existing_tool_names if tool_name not in tool_names]
+        # Only remove non-MCP tools that aren't in the expected tool list
+        tool_names_to_remove = [tool_name for tool_name in existing_tool_names 
+                               if tool_name not in tool_names and tool_name not in mcp_tool_names]
 
-        # Start with existing tool IDs
+        # Start with existing tool IDs, ensuring MCP tools are always preserved
         tool_ids = existing_tool_ids.copy()
+        
+        # Ensure all MCP tools are preserved (in case they were missed)
+        for mcp_tool_id in mcp_tool_ids:
+            if mcp_tool_id not in tool_ids:
+                tool_ids.append(mcp_tool_id)
         
         # Add new tools
         if len(new_tool_names) > 0:
@@ -321,6 +334,25 @@ class AgentManager:
         return agent_state
 
     @enforce_types
+    def update_mcp_tools(self, agent_id: str, mcp_tools: List[str], actor: PydanticUser, tool_ids: List[str]) -> PydanticAgentState:
+        """Update the MCP tools connected to an agent."""
+        return self.update_agent(agent_id=agent_id, agent_update=UpdateAgent(mcp_tools=mcp_tools, tool_ids=tool_ids), actor=actor)
+
+    @enforce_types
+    def add_mcp_tool(self, agent_id: str, mcp_tool_name: str, tool_ids: List[str], actor: PydanticUser) -> PydanticAgentState:
+        """Add a single MCP tool to an agent."""
+        # First get the current agent state
+        agent_state = self.get_agent_by_id(agent_id=agent_id, actor=actor)
+        current_mcp_tools = agent_state.mcp_tools or []
+        
+        # Add the new MCP tool if not already present
+        if mcp_tool_name not in current_mcp_tools:
+            current_mcp_tools.append(mcp_tool_name)
+            return self.update_mcp_tools(agent_id=agent_id, mcp_tools=current_mcp_tools, actor=actor, tool_ids=tool_ids)
+        
+        return agent_state
+
+    @enforce_types
     def _update_agent(self, agent_id: str, agent_update: UpdateAgent, actor: PydanticUser) -> PydanticAgentState:
         """
         Update an existing agent.
@@ -338,7 +370,7 @@ class AgentManager:
             agent = AgentModel.read(db_session=session, identifier=agent_id, actor=actor)
 
             # Update scalar fields directly
-            scalar_fields = {"name", "system", "topic", "llm_config", "embedding_config", "message_ids", "tool_rules", "description", "metadata_"}
+            scalar_fields = {"name", "system", "topic", "llm_config", "embedding_config", "message_ids", "tool_rules", "description", "metadata_", "mcp_tools"}
             for field in scalar_fields:
                 value = getattr(agent_update, field, None)
                 if value is not None:
@@ -485,7 +517,9 @@ class AgentManager:
     @enforce_types
     def get_in_context_messages(self, agent_id: str, actor: PydanticUser) -> List[PydanticMessage]:
         message_ids = self.get_agent_by_id(agent_id=agent_id, actor=actor).message_ids
-        return self.message_manager.get_messages_by_ids(message_ids=message_ids, actor=actor)
+        messages = self.message_manager.get_messages_by_ids(message_ids=message_ids, actor=actor)
+        messages = [messages[0]] + [message for message in messages[1:] if message.user_id == actor.id]
+        return messages
 
     @enforce_types
     def get_system_message(self, agent_id: str, actor: PydanticUser) -> PydanticMessage:
@@ -519,14 +553,33 @@ class AgentManager:
     @enforce_types
     def trim_older_in_context_messages(self, num: int, agent_id: str, actor: PydanticUser) -> PydanticAgentState:
         message_ids = self.get_agent_by_id(agent_id=agent_id, actor=actor).message_ids
-        new_messages = [message_ids[0]] + message_ids[num:]  # 0 is system message
+        system_message_id = message_ids[0]
+        message_ids = message_ids[1:]
+
+        message_id_indices_belonging_to_actor = [idx for idx, message_id in enumerate(message_ids) if self.message_manager.get_message_by_id(message_id=message_id, actor=actor).user_id == actor.id]
+        message_id_indices_belonging_to_actor = message_id_indices_belonging_to_actor[num-1:]
+        message_ids_to_keep = [message_ids[idx] for idx in message_id_indices_belonging_to_actor]
+
+        message_id_indices_belonging_to_actor = set(message_id_indices_belonging_to_actor)
+        message_ids_to_keep = set(message_ids_to_keep)
+
+        # new_messages = [message_ids[0]] + message_ids[num:]  # 0 is system message
+        new_messages = [system_message_id] + [msg_id for msg_id in message_ids if (msg_id not in message_id_indices_belonging_to_actor or msg_id in message_ids_to_keep)]
         return self.set_in_context_messages(agent_id=agent_id, message_ids=new_messages, actor=actor)
 
     @enforce_types
     def trim_all_in_context_messages_except_system(self, agent_id: str, actor: PydanticUser) -> PydanticAgentState:
         message_ids = self.get_agent_by_id(agent_id=agent_id, actor=actor).message_ids
-        new_messages = [message_ids[0]]  # 0 is system message
-        return self.set_in_context_messages(agent_id=agent_id, message_ids=new_messages, actor=actor)
+        system_message_id = message_ids[0]  # 0 is system message
+        
+        # Keep system message and only filter out messages belonging to the current actor
+        new_message_ids = [system_message_id]
+        for message_id in message_ids[1:]:  # Skip system message
+            message = self.message_manager.get_message_by_id(message_id=message_id, actor=actor)
+            if message.user_id != actor.id:
+                new_message_ids.append(message_id)
+        
+        return self.set_in_context_messages(agent_id=agent_id, message_ids=new_message_ids, actor=actor)
 
     @enforce_types
     def prepend_to_in_context_messages(self, messages: List[PydanticMessage], agent_id: str, actor: PydanticUser) -> PydanticAgentState:
@@ -545,31 +598,44 @@ class AgentManager:
     @enforce_types
     def reset_messages(self, agent_id: str, actor: PydanticUser, add_default_initial_messages: bool = False) -> PydanticAgentState:
         """
-        Removes all in-context messages for the specified agent by:
-          1) Clearing the agent.messages relationship (which cascades delete-orphans).
-          2) Resetting the message_ids list to empty.
-          3) Committing the transaction.
+        Removes messages belonging to the specified actor from the agent's conversation history.
+        Preserves system messages and messages from other actors.
 
         This action is destructive and cannot be undone once committed.
 
         Args:
             add_default_initial_messages: If true, adds the default initial messages after resetting.
             agent_id (str): The ID of the agent whose messages will be reset.
-            actor (PydanticUser): The user performing this action.
+            actor (PydanticUser): The user performing this action - only their messages will be removed.
 
         Returns:
-            PydanticAgentState: The updated agent state with no linked messages.
+            PydanticAgentState: The updated agent state with actor's messages removed.
         """
         with self.session_maker() as session:
             # Retrieve the existing agent (will raise NoResultFound if invalid)
             agent = AgentModel.read(db_session=session, identifier=agent_id, actor=actor)
 
-            # Because of cascade="all, delete-orphan" on agent.messages, setting
-            # this relationship to an empty list will physically remove them from the DB.
-            agent.messages = []
+            # Get current messages to filter
+            current_messages = agent.messages
+            
+            # Filter out messages belonging to the specific actor, but keep:
+            # 1. System messages (role='system')
+            # 2. Messages from other actors (user_id != actor.id)
+            messages_to_keep = []
+            messages_to_remove = []
+            
+            for message in current_messages:
+                if message.role == 'system' or message.user_id == actor.id:
+                    messages_to_remove.append(message)
+                else:
+                    messages_to_keep.append(message)
 
-            # Also clear out the message_ids field to keep in-context memory consistent
-            agent.message_ids = []
+            # Update the agent's messages relationship to only keep filtered messages
+            agent.messages = messages_to_keep
+
+            # Update message_ids to reflect the remaining messages
+            # Keep the order based on created_at timestamp
+            agent.message_ids = [msg.id for msg in messages_to_keep]
 
             # Commit the update
             agent.update(db_session=session, actor=actor)
