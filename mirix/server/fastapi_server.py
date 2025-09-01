@@ -207,7 +207,7 @@ To fix it, install FFmpeg:
 The warning doesn't affect functionality as pydub falls back gracefully.
 """
 
-app = FastAPI(title="Mirix Agent API", version="0.1.2")
+app = FastAPI(title="Mirix Agent API", version="0.1.3")
 
 # Add CORS middleware
 app.add_middleware(
@@ -495,7 +495,21 @@ class ReflexionResponse(BaseModel):
 async def startup_event():
     """Initialize the agent when the server starts"""
     global agent
-    agent = AgentWrapper('mirix/configs/mirix_monitor.yaml')
+    
+    # Handle PyInstaller bundled resources
+    import sys
+    import os
+    from pathlib import Path
+    
+    if getattr(sys, 'frozen', False):
+        # Running in PyInstaller bundle
+        bundle_dir = Path(sys._MEIPASS)
+        config_path = bundle_dir / 'mirix' / 'configs' / 'mirix_monitor.yaml'
+    else:
+        # Running in development
+        config_path = Path('mirix/configs/mirix_monitor.yaml')
+    
+    agent = AgentWrapper(str(config_path))
     print("Agent initialized successfully")
 
 @app.get("/health")
@@ -1501,7 +1515,7 @@ async def get_credentials_memory():
         return []
 
 @app.post("/conversation/clear", response_model=ClearConversationResponse)
-async def clear_conversation_history(user_id: Optional[str] = None):
+async def clear_conversation_history():
     """Permanently clear all conversation history for the current agent (memories are preserved)"""
     try:
         if agent is None:

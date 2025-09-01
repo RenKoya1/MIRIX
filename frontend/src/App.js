@@ -6,6 +6,7 @@ import ExistingMemory from './components/ExistingMemory';
 import ApiKeyModal from './components/ApiKeyModal';
 import BackendLoadingModal from './components/BackendLoadingModal';
 import Logo from './components/Logo';
+import UpdateChecker from './components/UpdateChecker';
 import queuedFetch from './utils/requestQueue';
 import './App.css';
 import { useTranslation } from 'react-i18next';
@@ -347,7 +348,7 @@ function App() {
             size="small" 
             showText={false} 
           />
-          <span className="version">v0.1.2</span>
+          <span className="version">v0.1.3</span>
         </div>
         <div className="tabs">
           <button 
@@ -446,6 +447,9 @@ function App() {
         onRetry={retryBackendConnection}
         isReconnection={backendLoading.isReconnection}
       />
+
+      {/* Update Checker */}
+      <UpdateChecker currentVersion="0.1.3" />
     </div>
   );
 }

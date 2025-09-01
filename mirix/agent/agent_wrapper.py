@@ -461,7 +461,7 @@ class AgentWrapper():
             existing_image_names = set([file.name for file in existing_files])
 
             # update the database, delete the files that are in the database but got deleted somehow (potentially due to the calls unrelated to Mirix) in the cloud
-            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids(actor=self.client.user):
+            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids():
                 if file_name not in existing_image_names:
                     self.client.server.cloud_file_mapping_manager.delete_mapping(cloud_file_id=file_name)
                 else:
@@ -470,7 +470,7 @@ class AgentWrapper():
             # after this: every file in database, we can find it in the cloud
             # i.e., local database <= cloud
 
-            cloud_file_names_in_database_set = set(self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids(actor=self.client.user))
+            cloud_file_names_in_database_set = set(self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids())
 
             # since there might be images that belong to other projects, we need to delete those in `existing_files`
             remaining_indices = []
@@ -480,7 +480,7 @@ class AgentWrapper():
             
             # after this, every file in 'existing_files', we can find it in the database
 
-            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids(self.client.user):
+            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids():
                 assert file_name in existing_image_names
 
             existing_files = [existing_files[i] for i in remaining_indices]
@@ -655,7 +655,7 @@ class AgentWrapper():
 
     def _process_existing_uploaded_files(self):
         """Process any existing uploaded files for Gemini models."""
-        uploaded_mappings = self.client.server.cloud_file_mapping_manager.list_files_with_status(status='uploaded', actor=self.client.user)
+        uploaded_mappings = self.client.server.cloud_file_mapping_manager.list_files_with_status(status='uploaded')
 
         count = 0
         for mapping in uploaded_mappings:
@@ -744,6 +744,8 @@ class AgentWrapper():
                           else self.agent_config.get('api_version', '2024-10-01-preview'))
             azure_deployment = (custom_agent_config.get('azure_deployment') if custom_agent_config 
                                else self.agent_config.get('azure_deployment', model_name))
+            context_window = (custom_agent_config.get('context_window', 128000) if custom_agent_config 
+                              else self.agent_config.get('context_window', 128000))
             
             # Get custom API key if provided
             api_key = None
@@ -756,7 +758,7 @@ class AgentWrapper():
                 model=model_name,
                 model_endpoint_type="azure_openai",
                 model_endpoint=endpoint,
-                context_window=128000,
+                context_window=context_window,
                 # Use the new schema fields instead of dynamic assignment
                 api_version=api_version,
                 azure_endpoint=endpoint,
@@ -2011,11 +2013,11 @@ Please perform this analysis and create new memories as appropriate. Provide a d
             self.logger.info(f"# of Existing files in Google Clouds: {len(existing_image_names)}")
 
             # Sync database with cloud files
-            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids(actor=self.client.user):
+            for file_name in self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids():
                 if file_name not in existing_image_names:
                     self.client.server.cloud_file_mapping_manager.delete_mapping(cloud_file_id=file_name)
 
-            cloud_file_names_in_database_set = set(self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids(actor=self.client.user))
+            cloud_file_names_in_database_set = set(self.client.server.cloud_file_mapping_manager.list_all_cloud_file_ids())
 
             # Filter files that belong to this project
             remaining_indices = []
